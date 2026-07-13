@@ -11,6 +11,7 @@ import {
   type Operation,
   type OperationType,
   type PresenceEntry,
+  type RevokeDevicePayload,
   type SendOptions,
   type SendToDevicePayload,
 } from "@screenmesh/protocol";
@@ -152,6 +153,26 @@ export class MeshEngine {
   async deleteObjectLocal(objectId: string): Promise<void> {
     await this.cfg.db.objects.delete(objectId);
     await this.cfg.db.deliveries.where("objectId").equals(objectId).delete();
+  }
+
+  /**
+   * Owner-side revocation: tell the remaining devices and drop the device
+   * locally. Relay enforcement (rejecting the revoked device) happens via
+   * the HTTP revoke endpoint — see docs/Security.md §2.
+   */
+  async revokeDevice(deviceId: string): Promise<void> {
+    const others = (await this.cfg.db.devices.toArray()).filter(
+      (d) => d.id !== this.me && d.id !== deviceId,
+    );
+    for (const device of others) {
+      await this.sendOps(device.id, [
+        this.makeOp("REVOKE_DEVICE", undefined, {
+          deviceId,
+        } satisfies RevokeDevicePayload),
+      ]);
+    }
+    await this.cfg.db.devices.delete(deviceId);
+    this.peerKeys.delete(deviceId);
   }
 
   // --- internals ---
@@ -330,6 +351,12 @@ export class MeshEngine {
         await this.cfg.db.objects.delete(objectId);
         break;
       }
+      case "REVOKE_DEVICE": {
+        const { deviceId } = op.payload as RevokeDevicePayload;
+        await this.cfg.db.devices.delete(deviceId);
+        this.peerKeys.delete(deviceId);
+        break;
+      }
       default:
         break;
     }
@@ -347,6 +374,9 @@ export class MeshEngine {
       trusted: true,
     }));
     await this.cfg.db.devices.bulkPut(rows);
+    // The roster is authoritative: devices no longer in it were revoked.
+    const ids = new Set(entries.map((entry) => entry.id));
+    await this.cfg.db.devices.filter((d) => !ids.has(d.id)).delete();
   }
 
   private async keyFor(deviceId: string): Promise<CryptoKey> {

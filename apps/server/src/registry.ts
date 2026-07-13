@@ -109,6 +109,36 @@ export class WorkspaceRegistry {
     return null;
   }
 
+  /**
+   * Remove a device from the workspace (owner only). It can no longer
+   * authenticate to the relay. NOTE: the device may still hold the current
+   * workspace key — full cryptographic revocation needs key rotation
+   * (docs/Roadmap.md, phase 1 remainder).
+   */
+  removeDevice(
+    workspaceId: string,
+    requesterId: string,
+    deviceId: string,
+  ): RegistryError | null {
+    const ws = this.workspaces.get(workspaceId);
+    if (!ws) return { code: 404, message: "unknown workspace" };
+    if (ws.ownerDeviceId !== requesterId) {
+      return { code: 403, message: "only the workspace owner can revoke devices" };
+    }
+    if (deviceId === ws.ownerDeviceId) {
+      return { code: 400, message: "the owner device cannot revoke itself" };
+    }
+    if (!ws.devices.delete(deviceId)) {
+      return { code: 404, message: "device is not in this workspace" };
+    }
+    return null;
+  }
+
+  workspaceExpired(workspaceId: string): boolean {
+    const ws = this.workspaces.get(workspaceId);
+    return !!ws?.expiresAt && Date.now() > ws.expiresAt;
+  }
+
   getDevice(workspaceId: string, deviceId: string): StoredDevice | undefined {
     return this.workspaces.get(workspaceId)?.devices.get(deviceId);
   }

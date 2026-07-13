@@ -31,7 +31,7 @@ let relay!: RelayHandle;
 await app.register(
   async (scope) => {
     relay = await registerRelay(scope, registry);
-    await registerWorkspaceRoutes(scope, registry, relay.isOnline, relay.broadcastPresence);
+    await registerWorkspaceRoutes(scope, registry, relay);
     await registerSignaling(scope);
 
     scope.get("/health", async () => ({ ok: true }));

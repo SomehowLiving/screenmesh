@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type {
   CreateWorkspaceRequest,
   JoinWorkspaceRequest,
+  RevokeDeviceRequest,
   RotatePairingRequest,
 } from "@screenmesh/protocol";
 import { isRegistryError, type WorkspaceRegistry } from "./registry.js";
@@ -15,9 +16,13 @@ import { isRegistryError, type WorkspaceRegistry } from "./registry.js";
 export async function registerWorkspaceRoutes(
   app: FastifyInstance,
   registry: WorkspaceRegistry,
-  isOnline: (deviceId: string) => boolean,
-  broadcastPresence: (workspaceId: string) => void,
+  relay: {
+    isOnline(deviceId: string): boolean;
+    broadcastPresence(workspaceId: string): void;
+    disconnectDevice(deviceId: string): void;
+  },
 ): Promise<void> {
+  const { isOnline, broadcastPresence } = relay;
   app.post("/workspaces", async (req, reply) => {
     const body = req.body as CreateWorkspaceRequest;
     if (!body?.workspace?.id || !body.device?.id || !body.device.publicKey || !body.pairingToken) {
@@ -50,6 +55,19 @@ export async function registerWorkspaceRoutes(
     }
     const err = registry.rotatePairing(id, body.deviceId, body.pairingToken, body.tokenExpiresAt);
     if (err) return reply.code(err.code).send({ error: err.message });
+    return reply.send({ ok: true });
+  });
+
+  app.post("/workspaces/:id/revoke", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as RevokeDeviceRequest;
+    if (!body?.ownerDeviceId || !body.deviceId) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const err = registry.removeDevice(id, body.ownerDeviceId, body.deviceId);
+    if (err) return reply.code(err.code).send({ error: err.message });
+    relay.disconnectDevice(body.deviceId);
+    broadcastPresence(id);
     return reply.send({ ok: true });
   });
 }

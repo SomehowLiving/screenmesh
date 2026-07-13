@@ -1,11 +1,20 @@
 import { useState } from "react";
 
+const TTL_CHOICES: Array<{ label: string; ms?: number }> = [
+  { label: "Never expires" },
+  { label: "Expires in 1 hour", ms: 60 * 60 * 1000 },
+  { label: "Expires in 6 hours", ms: 6 * 60 * 60 * 1000 },
+  { label: "Expires in 24 hours", ms: 24 * 60 * 60 * 1000 },
+  { label: "Expires in 7 days", ms: 7 * 24 * 60 * 60 * 1000 },
+];
+
 export function LandingView(props: {
   error: string | null;
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (name: string, ttlMs?: number) => Promise<void>;
   onJoinCode: (code: string) => void;
 }) {
   const [workspaceName, setWorkspaceName] = useState("My Workspace");
+  const [ttlIndex, setTtlIndex] = useState(0);
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,13 +34,20 @@ export function LandingView(props: {
             value={workspaceName}
             onChange={(e) => setWorkspaceName(e.target.value)}
           />
+          <select value={ttlIndex} onChange={(e) => setTtlIndex(Number(e.target.value))}>
+            {TTL_CHOICES.map((choice, i) => (
+              <option key={choice.label} value={i}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
           <button
             disabled={busy || !workspaceName.trim()}
             onClick={async () => {
               setBusy(true);
               setError(null);
               try {
-                await props.onCreate(workspaceName.trim());
+                await props.onCreate(workspaceName.trim(), TTL_CHOICES[ttlIndex]?.ms);
               } catch (err) {
                 setError(`Could not create workspace: ${err instanceof Error ? err.message : err}`);
               } finally {

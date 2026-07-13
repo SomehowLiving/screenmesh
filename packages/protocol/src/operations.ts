@@ -43,3 +43,7 @@ export interface SendToDevicePayload {
 export interface ObjectRefPayload {
   objectId: string;
 }
+
+export interface RevokeDevicePayload {
+  deviceId: string;
+}

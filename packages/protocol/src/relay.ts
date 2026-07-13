@@ -53,3 +53,9 @@ export interface RotatePairingRequest {
   pairingToken: string;
   tokenExpiresAt: number;
 }
+
+/** POST /workspaces/:id/revoke (owner only) */
+export interface RevokeDeviceRequest {
+  ownerDeviceId: string;
+  deviceId: string;
+}

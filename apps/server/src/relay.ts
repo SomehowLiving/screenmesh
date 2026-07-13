@@ -12,6 +12,8 @@ const MAX_QUEUE_PER_DEVICE = 1000;
 export interface RelayHandle {
   isOnline(deviceId: string): boolean;
   broadcastPresence(workspaceId: string): void;
+  /** Force-close a device's connection and drop its queued envelopes. */
+  disconnectDevice(deviceId: string): void;
 }
 
 async function verifyDeviceSignature(
@@ -88,6 +90,12 @@ export async function registerRelay(
 
         switch (msg.type) {
           case "auth": {
+            if (registry.workspaceExpired(msg.workspaceId)) {
+              return sendTo(socket, {
+                type: "authError",
+                reason: "workspace expired",
+              });
+            }
             const device = registry.getDevice(msg.workspaceId, msg.deviceId);
             if (!device) {
               return sendTo(socket, {
@@ -160,5 +168,14 @@ export async function registerRelay(
     });
   });
 
-  return { isOnline, broadcastPresence };
+  const disconnectDevice = (deviceId: string): void => {
+    queues.delete(deviceId);
+    const socket = connections.get(deviceId);
+    if (socket) {
+      connections.delete(deviceId);
+      socket.close();
+    }
+  };
+
+  return { isOnline, broadcastPresence, disconnectDevice };
 }

@@ -129,6 +129,53 @@ async function main(): Promise<void> {
   });
   console.log("[5/5] opened receipt propagated back to A");
 
+  // File/image objects travel as base64 content inside the same envelopes.
+  const pixels = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]);
+  const image = await ea.engine.sendObject(
+    {
+      type: "image",
+      content: {
+        name: "screenshot.png",
+        mimeType: "image/png",
+        size: pixels.length,
+        dataB64: pixels.toString("base64"),
+      },
+    },
+    [b.deviceId],
+  );
+  await waitFor("image to reach B", async () => !!(await eb.db.objects.get(image.id)));
+  const receivedImage = await eb.db.objects.get(image.id);
+  const imageContent = receivedImage?.content as { dataB64: string; name: string };
+  if (imageContent.dataB64 !== pixels.toString("base64")) {
+    throw new Error("image bytes corrupted in transit");
+  }
+  console.log("[6/7] image object with binary content arrived intact");
+
+  // Revocation: the server must refuse the revoked device's next auth.
+  const revokeRes = await fetch(`${SERVER}/workspaces/${workspaceId}/revoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ownerDeviceId: a.deviceId, deviceId: b.deviceId }),
+  });
+  if (!revokeRes.ok) throw new Error(`revoke failed: ${revokeRes.status}`);
+  await ea.engine.revokeDevice(b.deviceId);
+  const tbRevoked = new WebSocketRelayTransport(RELAY, {
+    deviceId: b.deviceId,
+    workspaceId,
+    sign: (data) => sign(b, data),
+  });
+  let authRejected = false;
+  try {
+    await tbRevoked.open();
+  } catch (err) {
+    authRejected = String(err).includes("not registered");
+  }
+  if (!authRejected) throw new Error("revoked device was still able to authenticate");
+  await waitFor("B removed from A's roster", async () => {
+    return !(await ea.db.devices.get(b.deviceId));
+  });
+  console.log("[7/7] revoked device rejected by relay and pruned from roster");
+
   await ea.engine.stop();
   await eb.engine.stop();
   console.log("ENGINE SMOKE OK");

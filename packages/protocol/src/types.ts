@@ -75,6 +75,19 @@ export interface Delivery {
   openedAt?: number;
 }
 
+/** Content shape for "text" | "link" | "code" objects. */
+export interface TextContent {
+  text: string;
+}
+
+/** Content shape for "image" | "file" objects (small payloads, base64). */
+export interface FileContent {
+  name: string;
+  mimeType: string;
+  size: number;
+  dataB64: string;
+}
+
 /** Options attached to a send action ("expire after 1 hour", etc.). */
 export interface SendOptions {
   deliverWhenDeviceReturns?: boolean;

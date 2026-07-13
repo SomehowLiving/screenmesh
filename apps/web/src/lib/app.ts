@@ -5,6 +5,7 @@ import type {
   JoinWorkspaceRequest,
   JoinWorkspaceResponse,
   PairingPayload,
+  RevokeDeviceRequest,
   RotatePairingRequest,
 } from "@screenmesh/protocol";
 import {
@@ -146,12 +147,14 @@ export async function createWorkspaceOnServer(
   db: ScreenMeshDb,
   me: LocalIdentity,
   name: string,
+  workspaceTtlMs?: number,
 ): Promise<{ workspace: LocalWorkspace; key: CryptoKey; pairing: PairingPayload }> {
   const key = await generateWorkspaceKey();
   const serverUrl = serverBaseUrl();
   // Short URL-safe id (22 chars vs a 36-char UUID) keeps the QR sparse.
   const workspaceId = randomId();
   const now = Date.now();
+  const expiresAt = workspaceTtlMs !== undefined ? now + workspaceTtlMs : undefined;
   const pairing = createPairingPayload({
     workspaceId,
     workspaceKey: await exportWorkspaceKey(key),
@@ -160,7 +163,12 @@ export async function createWorkspaceOnServer(
     now,
   });
   const body: CreateWorkspaceRequest = {
-    workspace: { id: workspaceId, name, createdAt: now },
+    workspace: {
+      id: workspaceId,
+      name,
+      createdAt: now,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    },
     device: deviceInfo(me),
     pairingToken: pairing.pairingToken,
     tokenExpiresAt: pairing.expiresAt,
@@ -172,6 +180,7 @@ export async function createWorkspaceOnServer(
     name,
     serverUrl,
     ownerDeviceId: me.deviceId,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
   };
   await db.settings.bulkPut([
     { key: "workspace", value: workspace },
@@ -246,6 +255,38 @@ export async function rotatePairing(
   };
   await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/pairing-token`, body);
   return pairing;
+}
+
+/**
+ * Owner-side revocation: server enforcement first (the device can no
+ * longer authenticate), then notify the remaining devices via the engine.
+ */
+export async function revokeDevice(
+  me: LocalIdentity,
+  workspace: LocalWorkspace,
+  engine: MeshEngine,
+  deviceId: string,
+): Promise<void> {
+  const body: RevokeDeviceRequest = { ownerDeviceId: me.deviceId, deviceId };
+  await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/revoke`, body);
+  await engine.revokeDevice(deviceId);
+}
+
+/**
+ * Clear all workspace-scoped state (used on leave, revocation, or
+ * workspace expiry). The device identity is kept.
+ */
+export async function leaveWorkspace(db: ScreenMeshDb): Promise<void> {
+  await db.settings.bulkDelete(["workspace", "workspaceKey", "mySeq"]);
+  await Promise.all([
+    db.devices.clear(),
+    db.objects.clear(),
+    db.operations.clear(),
+    db.deliveries.clear(),
+    db.outbox.clear(),
+    db.carried.clear(),
+    db.seen.clear(),
+  ]);
 }
 
 export function makeJoinUrl(payload: PairingPayload): string {

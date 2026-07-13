@@ -38,6 +38,7 @@ export class WebSocketRelayTransport implements MeshTransport {
   private messageHandlers: Array<(data: Uint8Array) => void> = [];
   private statusHandlers: Array<(status: TransportStatus) => void> = [];
   private presenceHandlers: Array<(devices: PresenceEntry[]) => void> = [];
+  private authErrorHandlers: Array<(reason: string) => void> = [];
 
   constructor(
     private readonly relayWsUrl: string,
@@ -100,7 +101,12 @@ export class WebSocketRelayTransport implements MeshTransport {
               break;
             }
             case "authError": {
+              // The relay rejected us (revoked device, expired workspace,
+              // bad key). Retrying won't help — stop reconnecting and let
+              // the app decide what to do.
+              this.manuallyClosed = true;
               this.setStatus("error");
+              for (const handler of this.authErrorHandlers) handler(msg.reason);
               ws.close();
               if (!settled) {
                 settled = true;
@@ -222,6 +228,14 @@ export class WebSocketRelayTransport implements MeshTransport {
     this.statusHandlers.push(handler);
     return () => {
       this.statusHandlers = this.statusHandlers.filter((h) => h !== handler);
+    };
+  }
+
+  /** Fired when the relay refuses authentication (revoked / expired). */
+  subscribeAuthError(handler: (reason: string) => void): () => void {
+    this.authErrorHandlers.push(handler);
+    return () => {
+      this.authErrorHandlers = this.authErrorHandlers.filter((h) => h !== handler);
     };
   }
 }

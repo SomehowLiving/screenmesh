@@ -13,11 +13,13 @@ The core interaction to validate:
 **Pairing & identity**
 - [x] Accountless device identity (Ed25519, generated locally, never leaves the device)
 - [x] Workspace creation + QR / join-link pairing (single-use, expiring tokens; owner-minted)
-- [ ] Workspace expiry enforcement end-to-end; device revocation
+- [x] Workspace expiry (optional TTL at creation; relay refuses expired workspaces; clients clean up)
+- [x] Device revocation (owner-only; relay access cut immediately, roster pruned everywhere — cryptographic re-keying still pending, see Security)
 
 **Objects**
 - [x] Text, links, code snippets
-- [ ] Images, small files, checklists
+- [x] Images and small files (≤ 5 MB, base64 in encrypted envelopes; inline image preview + download)
+- [ ] Checklists; chunked transfer for larger files (wants WebRTC)
 
 **Sync**
 - [x] IndexedDB local storage (Dexie)
@@ -28,9 +30,10 @@ The core interaction to validate:
 
 **Device interactions**
 - [x] Device dashboard with live presence; device inbox
-- [x] Send to one or several devices (offline recipients get it on return)
+- [x] Send to one, several, or all devices (offline recipients get it on return)
 - [x] Delivery status lifecycle: queued → sending → delivered → opened
-- [ ] Send to all shortcut; continue-on-device
+- [x] Leave workspace (local cleanup; also triggered by revocation/expiry)
+- [ ] Continue-on-device
 
 **Security**
 - [x] End-to-end encrypted envelopes (AES-GCM workspace key + Ed25519 signatures)
