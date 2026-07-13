@@ -1,0 +1,23 @@
+{
+  "name": "screenmesh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first device handoff fabric that moves objects between screens through any available connection.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:web": "pnpm --filter @screenmesh/web dev",
+    "dev:server": "pnpm --filter @screenmesh/server dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "smoke": "tsx packages/sync/scripts/smoke.ts && tsx packages/sync/scripts/engine-smoke.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

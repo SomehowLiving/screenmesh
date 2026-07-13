@@ -1,0 +1,33 @@
+{
+  "name": "@screenmesh/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@screenmesh/crypto": "workspace:*",
+    "@screenmesh/protocol": "workspace:*",
+    "@screenmesh/storage": "workspace:*",
+    "@screenmesh/sync": "workspace:*",
+    "@screenmesh/transport": "workspace:*",
+    "dexie": "^4.0.10",
+    "dexie-react-hooks": "^1.1.7",
+    "qrcode": "^1.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vite-plugin-pwa": "^0.21.0"
+  }
+}
