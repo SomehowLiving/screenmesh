@@ -39,7 +39,13 @@ export function PairPanel(props: {
 
   useEffect(() => {
     if (canvasRef.current && joinUrl) {
-      void QRCode.toCanvas(canvasRef.current, joinUrl, { width: 220, margin: 1 });
+      // Low error correction + the compact pairing code keep the module
+      // count small; 300px with a quiet zone scans easily from a screen.
+      void QRCode.toCanvas(canvasRef.current, joinUrl, {
+        width: 300,
+        margin: 2,
+        errorCorrectionLevel: "L",
+      });
     }
   }, [joinUrl]);
 
@@ -67,6 +73,14 @@ export function PairPanel(props: {
             <strong>single-use</strong> and expire in 5 minutes — generate a new one
             for each device.
           </p>
+          {joinUrl && (
+            <p className="muted">
+              Link points at <span className="mono">{new URL(joinUrl).host}</span> —
+            the other device must be on the same network. It will show a
+            certificate warning once (self-signed dev cert); choose{" "}
+            <em>Advanced&nbsp;→&nbsp;Proceed</em>.
+            </p>
+          )}
           {pairing && (
             <p className="muted">
               Expires {new Date(pairing.expiresAt).toLocaleTimeString()}

@@ -1,5 +1,4 @@
 import { fromBase64, toBase64 } from "./base64.js";
-import type { DeviceInfo } from "./types.js";
 
 /**
  * Every message on every transport is wrapped in a SecureEnvelope.
@@ -72,17 +71,21 @@ export function envelopeFromJson(json: EnvelopeJson): SecureEnvelope {
  * Payload encoded into a pairing QR code / join link — the explicit trust
  * ceremony. The workspace key travels over this trusted visual channel
  * (MVP bootstrap), so relays never hold key material.
- * See docs/Security.md §2.
+ *
+ * Kept deliberately minimal so the QR stays low-density and easy to scan:
+ * workspace name, roster, and owner identity all come from the join
+ * response instead. See docs/Security.md §2.
  */
 export interface PairingPayload {
   workspaceId: string;
-  workspaceName: string;
   /** Base64 raw AES-256 workspace key, shared over the visual channel. */
   workspaceKey: string;
   /** Single-use, short-lived token authorizing this pairing. */
   pairingToken: string;
   expiresAt: number;
-  /** http(s) base URL of the relay server. */
-  serverUrl: string;
-  creator: DeviceInfo;
+  /**
+   * http(s) base URL of the relay server. Runtime hint only — NOT encoded
+   * into the QR; joiners default to their own origin (same-origin proxy).
+   */
+  serverUrl?: string;
 }

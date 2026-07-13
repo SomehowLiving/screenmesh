@@ -21,8 +21,8 @@ import type {
   JoinWorkspaceRequest,
 } from "@screenmesh/protocol";
 
-const SERVER = "http://127.0.0.1:8787";
-const RELAY = "ws://127.0.0.1:8787/relay";
+const SERVER = "http://127.0.0.1:8787/api";
+const RELAY = "ws://127.0.0.1:8787/api/relay";
 
 async function post(url: string, body: unknown): Promise<void> {
   const res = await fetch(url, {

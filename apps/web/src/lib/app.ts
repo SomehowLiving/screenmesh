@@ -16,6 +16,7 @@ import {
   generateIdentity,
   generateWorkspaceKey,
   importWorkspaceKey,
+  randomId,
   sign,
 } from "@screenmesh/crypto";
 import type { ScreenMeshDb } from "@screenmesh/storage";
@@ -44,12 +45,35 @@ export interface Session {
   transport: WebSocketRelayTransport;
 }
 
+/**
+ * The relay is proxied same-origin under /api (see vite.config.ts), so
+ * every device simply talks to whatever host it loaded the page from.
+ */
 export function serverBaseUrl(): string {
-  return `${location.protocol}//${location.hostname}:8787`;
+  return `${location.origin}/api`;
 }
 
 function relayWsUrl(serverUrl: string): string {
   return `${serverUrl.replace(/^http/, "ws")}/relay`;
+}
+
+/**
+ * An origin OTHER devices on the network can reach. When the page is open
+ * on localhost, join links/QRs would be useless to a phone — ask the
+ * server for this machine's LAN address and use that instead.
+ */
+export async function shareableOrigin(): Promise<string> {
+  const { protocol, hostname, port } = location;
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") return location.origin;
+  try {
+    const res = await fetch(`${serverBaseUrl()}/info`);
+    const data = (await res.json()) as { addresses: string[] };
+    const lanIp = data.addresses[0];
+    if (lanIp) return `${protocol}//${lanIp}${port ? `:${port}` : ""}`;
+  } catch {
+    /* fall back to the local origin */
+  }
+  return location.origin;
 }
 
 export function defaultDeviceType(): DeviceType {
@@ -125,14 +149,14 @@ export async function createWorkspaceOnServer(
 ): Promise<{ workspace: LocalWorkspace; key: CryptoKey; pairing: PairingPayload }> {
   const key = await generateWorkspaceKey();
   const serverUrl = serverBaseUrl();
-  const workspaceId = crypto.randomUUID();
+  // Short URL-safe id (22 chars vs a 36-char UUID) keeps the QR sparse.
+  const workspaceId = randomId();
   const now = Date.now();
   const pairing = createPairingPayload({
     workspaceId,
-    workspaceName: name,
     workspaceKey: await exportWorkspaceKey(key),
-    serverUrl,
-    creator: deviceInfo(me),
+    // The payload travels to OTHER devices — point it at a reachable host.
+    serverUrl: `${await shareableOrigin()}/api`,
     now,
   });
   const body: CreateWorkspaceRequest = {
@@ -165,15 +189,20 @@ export async function joinWorkspaceFromPayload(
     pairingToken: payload.pairingToken,
     device: deviceInfo(me),
   };
+  // The QR code doesn't carry a server URL — the join link already brought
+  // us to the right host, so our own origin (same-origin proxy) is correct.
+  const server = payload.serverUrl ?? serverBaseUrl();
   const data = await postJson<JoinWorkspaceResponse>(
-    `${payload.serverUrl}/workspaces/${payload.workspaceId}/join`,
+    `${server}/workspaces/${payload.workspaceId}/join`,
     body,
   );
   const key = await importWorkspaceKey(payload.workspaceKey);
   const workspace: LocalWorkspace = {
     id: data.workspace.id,
     name: data.workspace.name,
-    serverUrl: payload.serverUrl,
+    // Locally we always talk to our own origin (same-origin /api proxy),
+    // regardless of which host the payload advertised.
+    serverUrl: serverBaseUrl(),
     ownerDeviceId: data.workspace.ownerDeviceId,
     ...(data.workspace.expiresAt !== undefined
       ? { expiresAt: data.workspace.expiresAt }
@@ -206,10 +235,8 @@ export async function rotatePairing(
 ): Promise<PairingPayload> {
   const pairing = createPairingPayload({
     workspaceId: workspace.id,
-    workspaceName: workspace.name,
     workspaceKey: await exportWorkspaceKey(workspaceKey),
-    serverUrl: workspace.serverUrl,
-    creator: deviceInfo(me),
+    serverUrl: `${await shareableOrigin()}/api`,
     now: Date.now(),
   });
   const body: RotatePairingRequest = {
@@ -222,8 +249,10 @@ export async function rotatePairing(
 }
 
 export function makeJoinUrl(payload: PairingPayload): string {
-  const encoded = encodeURIComponent(encodePairingPayload(payload));
-  return `${location.origin}${location.pathname}${location.search}#join=${encoded}`;
+  // The pairing code is URL-safe by construction — no percent-encoding,
+  // which keeps the QR in the compact alphanumeric-ish density range.
+  const origin = (payload.serverUrl ?? serverBaseUrl()).replace(/\/api$/, "");
+  return `${origin}/#join=${encodePairingPayload(payload)}`;
 }
 
 /** Accepts a full join URL or a raw pairing code. */

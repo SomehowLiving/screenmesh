@@ -27,8 +27,8 @@ import {
   type JoinWorkspaceResponse,
 } from "@screenmesh/protocol";
 
-const SERVER = "http://127.0.0.1:8787";
-const RELAY = "ws://127.0.0.1:8787/relay";
+const SERVER = "http://127.0.0.1:8787/api";
+const RELAY = "ws://127.0.0.1:8787/api/relay";
 
 function assert(cond: unknown, message: string): asserts cond {
   if (!cond) throw new Error(`ASSERT FAILED: ${message}`);

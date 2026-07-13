@@ -116,7 +116,11 @@ pnpm typecheck
 pnpm smoke
 ```
 
-**Trying it out with two "devices":** open `http://localhost:5173` in one browser window (create the workspace) and `http://localhost:5173/?device=2` in another (the `device` query parameter gives it a separate local identity/database). Copy the join link from the first window's pairing panel into the second. To pair a real phone, run `pnpm dev:web -- --host` and open the LAN URL so the QR code points at an address the phone can reach.
+The dev server listens on all interfaces over **HTTPS** (self-signed — Web Crypto requires a secure context) and proxies the relay same-origin under `/api`, so one URL serves the page, the pairing API, and the WebSocket.
+
+**Pairing a phone:** start both dev servers, open `https://localhost:5173` on the laptop, and create a workspace. The QR/join link automatically points at your machine's **LAN IP** (the server reports it via `/api/info`) — scan it with the phone's camera. The phone shows a certificate warning once (self-signed dev cert): tap *Advanced → Proceed*, name the device, and it joins. Both devices must be on the same Wi-Fi, and Windows Firewall must allow Node on ports 5173/8787 (allow the prompt on first run).
+
+**Two "devices" on one machine:** open `https://localhost:5173` in one window and `https://localhost:5173/?device=2` in another — the `device` query parameter gives it a separate local identity/database. Paste the join link into the second window's *Join a workspace* box.
 
 ## Tech stack
 
