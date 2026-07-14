@@ -8,37 +8,38 @@ The core interaction to validate:
 
 - Monorepo, shared types, adapter interfaces, docs.
 
-## Phase 1 — MVP: QR-bootstrapped handoff (in progress)
+## Phase 1 — MVP: QR-bootstrapped handoff ✅
 
 **Pairing & identity**
-- [x] Accountless device identity (Ed25519, generated locally, never leaves the device)
+- [x] Accountless device identity (Ed25519 signing + X25519 key agreement, generated locally)
 - [x] Workspace creation + QR / join-link pairing (single-use, expiring tokens; owner-minted)
 - [x] Workspace expiry (optional TTL at creation; relay refuses expired workspaces; clients clean up)
-- [x] Device revocation (owner-only; relay access cut immediately, roster pruned everywhere — cryptographic re-keying still pending, see Security)
+- [x] Device revocation (owner-only; relay access cut immediately, roster pruned everywhere, workspace key rotated)
 
 **Objects**
 - [x] Text, links, code snippets
 - [x] Images and small files (≤ 5 MB, base64 in encrypted envelopes; inline image preview + download)
-- [ ] Checklists; chunked transfer for larger files (wants WebRTC)
+- [x] Checklists (toggle/add items on any device; last-write-wins merge)
+- [ ] Chunked transfer for larger files over WebRTC
 
 **Sync**
 - [x] IndexedDB local storage (Dexie)
 - [x] Real-time relay sync (authenticated WebSocket, Ed25519 challenge)
 - [x] Offline queues on both sides: client outbox drains on reconnect; relay store-and-forward for offline recipients
-- [ ] WebRTC direct transfer (signaling endpoint stubbed)
-- [ ] CRDT editing (Yjs) for concurrent object edits
+- [x] WebRTC direct transfer (data channels, relay-forwarded signaling, automatic relay fallback)
+- [x] CRDT editing (Yjs): concurrent text edits merge instead of overwriting
 
 **Device interactions**
-- [x] Device dashboard with live presence; device inbox
+- [x] Device dashboard with live presence; shared objects board
 - [x] Send to one, several, or all devices (offline recipients get it on return)
 - [x] Delivery status lifecycle: queued → sending → delivered → opened
 - [x] Leave workspace (local cleanup; also triggered by revocation/expiry)
-- [ ] Continue-on-device
+- [x] Continue-on-device (hands the object off and auto-opens the editor on the target)
 
 **Security**
 - [x] End-to-end encrypted envelopes (AES-GCM workspace key + Ed25519 signatures)
 - [x] Replay protection: message-ID dedupe, sequence numbers, envelope expiry
-- [ ] Workspace key rotation; revocation-driven re-keying
+- [x] Workspace key rotation on revocation: new key wrapped per-device via X25519 ECDH, epoch-tagged envelopes; revoked devices cannot unwrap post-rotation traffic
 
 ## Phase 2 — Eventual delivery
 

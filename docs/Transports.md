@@ -40,7 +40,7 @@ Which maps onto three operating modes:
 ## MVP adapters
 
 ### WebRTC (`webrtc.ts`)
-Direct browser-to-browser data channels. Best for low-latency transfer and large files when both devices are online and a peer connection can be established. Signaling goes through the relay server; media never does. Used for notes, clipboard items, images, files, and presence.
+Direct browser-to-browser data channels (`WebRtcDirect`). Offers/answers/ICE are forwarded verbatim between authenticated devices over the relay's `signal` messages; encrypted envelopes then move peer-to-peer. Glare is avoided by letting only the device with the lexicographically smaller id create offers (the other side sends `request-offer`). The engine tries the direct channel first on every send and falls back to the relay transparently, so a missing or still-connecting peer connection costs nothing.
 
 ### WebSocket relay (`websocket.ts`)
 The server forwards encrypted envelopes when P2P fails — different networks, corporate NAT, one device reconnecting. Also provides the store-and-forward queue for offline recipients. The server never needs plaintext.

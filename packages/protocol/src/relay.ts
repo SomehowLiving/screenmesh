@@ -17,6 +17,12 @@ export type RelayClientMessage =
       signature: string;
     }
   | { type: "envelope"; envelope: EnvelopeJson }
+  | {
+      /** WebRTC signaling (offers/answers/ICE), forwarded verbatim. */
+      type: "signal";
+      to: string;
+      data: unknown;
+    }
   | { type: "ping" };
 
 export type RelayServerMessage =
@@ -25,6 +31,7 @@ export type RelayServerMessage =
   | { type: "authError"; reason: string }
   | { type: "envelope"; envelope: EnvelopeJson }
   | { type: "presence"; devices: PresenceEntry[] }
+  | { type: "signal"; from: string; data: unknown }
   | { type: "pong" }
   | { type: "error"; reason: string };
 

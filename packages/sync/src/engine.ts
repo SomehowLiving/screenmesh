@@ -1,6 +1,10 @@
+import * as Y from "yjs";
 import {
   envelopeFromJson,
   envelopeToJson,
+  fromBase64,
+  toBase64,
+  type ContinueOnDevicePayload,
   type CreateObjectPayload,
   type Delivery,
   type Device,
@@ -12,13 +16,23 @@ import {
   type OperationType,
   type PresenceEntry,
   type RevokeDevicePayload,
+  type RotateKeyPayload,
   type SendOptions,
   type SendToDevicePayload,
+  type TextContent,
+  type UpdateObjectPayload,
+  type YjsUpdatePayload,
 } from "@screenmesh/protocol";
 import {
+  exportRawWorkspaceKey,
+  generateWorkspaceKey,
+  importEncryptionPublicKey,
   importPublicKey,
+  importRawWorkspaceKey,
   openEnvelope,
   sealEnvelope,
+  unwrapKeyBytes,
+  wrapKeyBytes,
   type DeviceIdentity,
 } from "@screenmesh/crypto";
 import type { ScreenMeshDb } from "@screenmesh/storage";
@@ -27,12 +41,45 @@ import type { WebSocketRelayTransport } from "@screenmesh/transport";
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SEEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Object types whose text is collaboratively editable via Yjs. */
+const EDITABLE_TYPES = new Set(["text", "code", "link"]);
+
+/** Apply `next` to a Y.Text as a minimal splice (common prefix/suffix). */
+function applyTextDiff(ytext: Y.Text, next: string): void {
+  const prev = ytext.toString();
+  if (prev === next) return;
+  let start = 0;
+  while (start < prev.length && start < next.length && prev[start] === next[start]) {
+    start++;
+  }
+  let endPrev = prev.length;
+  let endNext = next.length;
+  while (endPrev > start && endNext > start && prev[endPrev - 1] === next[endNext - 1]) {
+    endPrev--;
+    endNext--;
+  }
+  if (endPrev > start) ytext.delete(start, endPrev - start);
+  if (endNext > start) ytext.insert(start, next.slice(start, endNext));
+}
+
+/** An optional direct (peer-to-peer) byte channel, e.g. WebRTC. */
+export interface DirectChannel {
+  /** Returns true if the bytes were handed to an OPEN direct channel. */
+  trySend(peerId: string, data: Uint8Array): boolean;
+  onMessage(handler: (data: Uint8Array) => void): void;
+}
+
 export interface EngineConfig {
   db: ScreenMeshDb;
   identity: DeviceIdentity;
   workspaceId: string;
+  /** Epoch-0 workspace key (from the pairing QR). */
   workspaceKey: CryptoKey;
+  /** Only this device may rotate keys or revoke devices. */
+  ownerDeviceId: string;
   transport: WebSocketRelayTransport;
+  /** Optional peer-to-peer channel tried before the relay (WebRTC). */
+  direct?: DirectChannel;
   now?: () => number;
 }
 
@@ -46,8 +93,15 @@ export interface EngineConfig {
 export class MeshEngine {
   private seq = 0;
   private readonly peerKeys = new Map<string, CryptoKey>();
+  /** Workspace keys by epoch; old epochs stay decryptable. */
+  private readonly keys = new Map<number, CryptoKey>();
+  private currentEpoch = 0;
+  /** In-memory Yjs docs for collaboratively edited objects. */
+  private readonly ydocs = new Map<string, Y.Doc>();
 
-  constructor(private readonly cfg: EngineConfig) {}
+  constructor(private readonly cfg: EngineConfig) {
+    this.keys.set(0, cfg.workspaceKey);
+  }
 
   private get me(): string {
     return this.cfg.identity.deviceId;
@@ -60,17 +114,25 @@ export class MeshEngine {
   async start(): Promise<void> {
     const seqSetting = await this.cfg.db.settings.get("mySeq");
     this.seq = typeof seqSetting?.value === "number" ? seqSetting.value : 0;
+
+    const rotated = await this.cfg.db.settings.get("rotatedKeys");
+    for (const entry of (rotated?.value as Array<{ epoch: number; key: CryptoKey }>) ?? []) {
+      this.keys.set(entry.epoch, entry.key);
+      if (entry.epoch > this.currentEpoch) this.currentEpoch = entry.epoch;
+    }
     await this.cfg.db.seen
       .where("seenAt")
       .below(this.now() - SEEN_RETENTION_MS)
       .delete();
 
     const transport = this.cfg.transport;
-    transport.onMessage((data) => {
+    const incoming = (data: Uint8Array) => {
       void this.handleIncoming(data).catch((err) => {
         console.error("screenmesh: failed to process incoming envelope", err);
       });
-    });
+    };
+    transport.onMessage(incoming);
+    this.cfg.direct?.onMessage(incoming);
     transport.subscribePresence((devices) => {
       void this.applyPresence(devices);
     });
@@ -103,6 +165,18 @@ export class MeshEngine {
     };
     await this.cfg.db.objects.add(object);
 
+    // Editable objects get a Yjs doc seeded by the CREATOR only; everyone
+    // else receives the seeded state, so concurrent edits merge cleanly.
+    let seedUpdateB64: string | null = null;
+    if (EDITABLE_TYPES.has(object.type)) {
+      const doc = new Y.Doc();
+      const text = (object.content as TextContent | null)?.text ?? "";
+      doc.getText("text").insert(0, text);
+      this.ydocs.set(object.id, doc);
+      await this.persistDoc(object.id, doc);
+      seedUpdateB64 = toBase64(Y.encodeStateAsUpdate(doc));
+    }
+
     for (const recipientId of recipientIds) {
       const delivery: Delivery = {
         id: crypto.randomUUID(),
@@ -113,21 +187,101 @@ export class MeshEngine {
         createdAt: now,
       };
       await this.cfg.db.deliveries.add(delivery);
-      const ops = [
+      const ops: Operation<unknown>[] = [
         this.makeOp("CREATE_OBJECT", object.id, {
           object,
         } satisfies CreateObjectPayload),
+      ];
+      if (seedUpdateB64 !== null) {
+        ops.push(
+          this.makeOp("YJS_UPDATE", object.id, {
+            objectId: object.id,
+            updateB64: seedUpdateB64,
+          } satisfies YjsUpdatePayload),
+        );
+      }
+      ops.push(
         this.makeOp("SEND_TO_DEVICE", object.id, {
           objectId: object.id,
           options,
         } satisfies SendToDevicePayload),
-      ];
+      );
       const sentLive = await this.sendOps(recipientId, ops);
       if (sentLive) {
         await this.cfg.db.deliveries.update(delivery.id, { status: "sending" });
       }
     }
     return object;
+  }
+
+  /**
+   * Collaborative text editing: apply the new text as a minimal splice on
+   * the object's Y.Text and broadcast the full doc state (idempotent and
+   * order-independent — concurrent edits on other devices merge instead
+   * of overwriting).
+   */
+  async editText(objectId: string, newText: string): Promise<void> {
+    const object = await this.cfg.db.objects.get(objectId);
+    if (!object || !EDITABLE_TYPES.has(object.type)) return;
+    const doc = await this.docFor(objectId);
+    doc.transact(() => applyTextDiff(doc.getText("text"), newText));
+    await this.persistDoc(objectId, doc);
+    await this.cfg.db.objects.update(objectId, {
+      content: { text: doc.getText("text").toString() },
+      updatedAt: this.now(),
+    });
+    await this.broadcastOps([
+      this.makeOp("YJS_UPDATE", objectId, {
+        objectId,
+        updateB64: toBase64(Y.encodeStateAsUpdate(doc)),
+      } satisfies YjsUpdatePayload),
+    ]);
+  }
+
+  /** Last-write-wins content replacement (checklist toggles, etc.). */
+  async updateObjectContent(objectId: string, content: unknown): Promise<void> {
+    const now = this.now();
+    await this.cfg.db.objects.update(objectId, { content, updatedAt: now });
+    await this.broadcastOps([
+      this.makeOp("UPDATE_OBJECT", objectId, {
+        objectId,
+        content,
+        updatedAt: now,
+      } satisfies UpdateObjectPayload),
+    ]);
+  }
+
+  /**
+   * Hand an object off to another device: deliver it (idempotent if the
+   * device already has it) and ask that device to open it for editing.
+   */
+  async continueOnDevice(objectId: string, deviceId: string): Promise<void> {
+    const object = await this.cfg.db.objects.get(objectId);
+    if (!object) return;
+    const ops: Operation<unknown>[] = [
+      this.makeOp("CREATE_OBJECT", objectId, {
+        object,
+      } satisfies CreateObjectPayload),
+    ];
+    if (EDITABLE_TYPES.has(object.type)) {
+      const doc = await this.docFor(objectId);
+      ops.push(
+        this.makeOp("YJS_UPDATE", objectId, {
+          objectId,
+          updateB64: toBase64(Y.encodeStateAsUpdate(doc)),
+        } satisfies YjsUpdatePayload),
+      );
+    }
+    ops.push(
+      this.makeOp("SEND_TO_DEVICE", objectId, {
+        objectId,
+        options: {},
+      } satisfies SendToDevicePayload),
+      this.makeOp("CONTINUE_ON_DEVICE", objectId, {
+        objectId,
+      } satisfies ContinueOnDevicePayload),
+    );
+    await this.sendOps(deviceId, ops);
   }
 
   /** Recipient-side: mark an object opened and notify the sender. */
@@ -153,6 +307,33 @@ export class MeshEngine {
   async deleteObjectLocal(objectId: string): Promise<void> {
     await this.cfg.db.objects.delete(objectId);
     await this.cfg.db.deliveries.where("objectId").equals(objectId).delete();
+    await this.cfg.db.ydocs.delete(objectId);
+    this.ydocs.get(objectId)?.destroy();
+    this.ydocs.delete(objectId);
+  }
+
+  private async docFor(objectId: string): Promise<Y.Doc> {
+    const cached = this.ydocs.get(objectId);
+    if (cached) return cached;
+    const doc = new Y.Doc();
+    const persisted = await this.cfg.db.ydocs.get(objectId);
+    if (persisted) Y.applyUpdate(doc, persisted.state);
+    this.ydocs.set(objectId, doc);
+    return doc;
+  }
+
+  private async persistDoc(objectId: string, doc: Y.Doc): Promise<void> {
+    await this.cfg.db.ydocs.put({ objectId, state: Y.encodeStateAsUpdate(doc) });
+  }
+
+  /** Send the same ops to every other device in the workspace. */
+  private async broadcastOps(ops: Operation<unknown>[]): Promise<void> {
+    const others = (await this.cfg.db.devices.toArray()).filter(
+      (d) => d.id !== this.me,
+    );
+    for (const device of others) {
+      await this.sendOps(device.id, ops);
+    }
   }
 
   /**
@@ -173,6 +354,61 @@ export class MeshEngine {
     }
     await this.cfg.db.devices.delete(deviceId);
     this.peerKeys.delete(deviceId);
+  }
+
+  /**
+   * Owner-side key rotation (docs/Security.md §5): generate a fresh
+   * workspace key and send it to each remaining device wrapped via X25519
+   * ECDH — the revoked device cannot unwrap it, so everything sent after
+   * rotation is cryptographically out of its reach. Old epochs are kept
+   * so history and in-flight envelopes stay readable.
+   */
+  async rotateWorkspaceKey(): Promise<number> {
+    if (this.me !== this.cfg.ownerDeviceId) {
+      throw new Error("only the workspace owner can rotate keys");
+    }
+    const newEpoch = this.currentEpoch + 1;
+    const newKey = await generateWorkspaceKey();
+    const rawKey = await exportRawWorkspaceKey(newKey);
+
+    const others = (await this.cfg.db.devices.toArray()).filter(
+      (d) => d.id !== this.me,
+    );
+    for (const device of others) {
+      if (!device.encryptionKey) {
+        console.warn(
+          `screenmesh: device ${device.name} has no encryption key (paired before rotation support) — it will lose access after rotation; re-pair it`,
+        );
+        continue;
+      }
+      const theirPublic = await importEncryptionPublicKey(device.encryptionKey);
+      const wrapped = await wrapKeyBytes(
+        this.cfg.identity.encryptionPrivateKey,
+        theirPublic,
+        rawKey,
+      );
+      // Sent under the CURRENT epoch (outer layer); the new key itself is
+      // protected by the pairwise ECDH wrap, not by the old workspace key.
+      await this.sendOps(device.id, [
+        this.makeOp("ROTATE_KEY", undefined, {
+          epoch: newEpoch,
+          wrappedKeyB64: wrapped.wrappedKeyB64,
+          nonceB64: wrapped.nonceB64,
+        } satisfies RotateKeyPayload),
+      ]);
+    }
+
+    await this.adoptKey(newEpoch, newKey);
+    return newEpoch;
+  }
+
+  private async adoptKey(epoch: number, key: CryptoKey): Promise<void> {
+    this.keys.set(epoch, key);
+    if (epoch > this.currentEpoch) this.currentEpoch = epoch;
+    const rotated = [...this.keys.entries()]
+      .filter(([e]) => e > 0)
+      .map(([e, k]) => ({ epoch: e, key: k }));
+    await this.cfg.db.settings.put({ key: "rotatedKeys", value: rotated });
   }
 
   // --- internals ---
@@ -201,18 +437,31 @@ export class MeshEngine {
     this.seq += 1;
     await this.cfg.db.settings.put({ key: "mySeq", value: this.seq });
 
+    const workspaceKey = this.keys.get(this.currentEpoch);
+    if (!workspaceKey) throw new Error(`missing workspace key epoch ${this.currentEpoch}`);
     const plaintext = new TextEncoder().encode(JSON.stringify({ ops }));
     const envelope = await sealEnvelope({
       identity: this.cfg.identity,
       recipientDeviceId: recipientId,
       workspaceId: this.cfg.workspaceId,
-      workspaceKey: this.cfg.workspaceKey,
+      workspaceKey,
       plaintext,
       sequenceNumber: this.seq,
       createdAt: this.now(),
+      keyEpoch: this.currentEpoch,
     });
     const json = envelopeToJson(envelope);
 
+    // Prefer a direct peer-to-peer channel; payloads then bypass the
+    // relay entirely. Falls back to the relay, then the outbox.
+    if (this.cfg.direct) {
+      try {
+        const bytes = new TextEncoder().encode(JSON.stringify(json));
+        if (this.cfg.direct.trySend(recipientId, bytes)) return true;
+      } catch {
+        // fall through to the relay
+      }
+    }
     if (this.cfg.transport.isConnected) {
       try {
         this.cfg.transport.sendEnvelope(json);
@@ -257,13 +506,14 @@ export class MeshEngine {
     if (envelope.workspaceId !== this.cfg.workspaceId) return;
     if (await this.cfg.db.seen.get(envelope.messageId)) return;
 
+    const workspaceKey = this.keys.get(envelope.keyEpoch);
+    if (!workspaceKey) {
+      throw new Error(
+        `no workspace key for epoch ${envelope.keyEpoch} (envelope ${envelope.messageId})`,
+      );
+    }
     const senderKey = await this.keyFor(envelope.senderDeviceId);
-    const plaintext = await openEnvelope(
-      envelope,
-      senderKey,
-      this.cfg.workspaceKey,
-      now,
-    );
+    const plaintext = await openEnvelope(envelope, senderKey, workspaceKey, now);
     await this.cfg.db.seen.add({ messageId: envelope.messageId, seenAt: now });
 
     const { ops } = JSON.parse(new TextDecoder().decode(plaintext)) as {
@@ -281,7 +531,42 @@ export class MeshEngine {
     switch (op.type) {
       case "CREATE_OBJECT": {
         const { object } = op.payload as CreateObjectPayload;
-        await this.cfg.db.objects.put(object);
+        const existing = await this.cfg.db.objects.get(object.id);
+        if (!existing) await this.cfg.db.objects.put(object);
+        break;
+      }
+      case "UPDATE_OBJECT": {
+        const { objectId, content, updatedAt } = op.payload as UpdateObjectPayload;
+        const object = await this.cfg.db.objects.get(objectId);
+        if (object && updatedAt >= object.updatedAt) {
+          await this.cfg.db.objects.update(objectId, { content, updatedAt });
+        }
+        break;
+      }
+      case "YJS_UPDATE": {
+        const { objectId, updateB64 } = op.payload as YjsUpdatePayload;
+        const doc = await this.docFor(objectId);
+        Y.applyUpdate(doc, fromBase64(updateB64));
+        await this.persistDoc(objectId, doc);
+        const object = await this.cfg.db.objects.get(objectId);
+        if (object && EDITABLE_TYPES.has(object.type)) {
+          const merged = doc.getText("text").toString();
+          const current = (object.content as TextContent | null)?.text ?? "";
+          if (merged !== current) {
+            await this.cfg.db.objects.update(objectId, {
+              content: { text: merged },
+              updatedAt: now,
+            });
+          }
+        }
+        break;
+      }
+      case "CONTINUE_ON_DEVICE": {
+        const { objectId } = op.payload as ContinueOnDevicePayload;
+        await this.cfg.db.settings.put({
+          key: "focusObject",
+          value: { objectId, from: senderId, at: now },
+        });
         break;
       }
       case "SEND_TO_DEVICE": {
@@ -353,8 +638,27 @@ export class MeshEngine {
       }
       case "REVOKE_DEVICE": {
         const { deviceId } = op.payload as RevokeDevicePayload;
+        if (senderId !== this.cfg.ownerDeviceId) break;
         await this.cfg.db.devices.delete(deviceId);
         this.peerKeys.delete(deviceId);
+        break;
+      }
+      case "ROTATE_KEY": {
+        if (senderId !== this.cfg.ownerDeviceId) break;
+        const { epoch, wrappedKeyB64, nonceB64 } = op.payload as RotateKeyPayload;
+        if (this.keys.has(epoch)) break;
+        const sender = await this.cfg.db.devices.get(senderId);
+        if (!sender?.encryptionKey) {
+          console.warn("screenmesh: ROTATE_KEY from a sender without an encryption key");
+          break;
+        }
+        const senderPublic = await importEncryptionPublicKey(sender.encryptionKey);
+        const rawKey = await unwrapKeyBytes(
+          this.cfg.identity.encryptionPrivateKey,
+          senderPublic,
+          { wrappedKeyB64, nonceB64 },
+        );
+        await this.adoptKey(epoch, await importRawWorkspaceKey(rawKey));
         break;
       }
       default:
@@ -367,6 +671,9 @@ export class MeshEngine {
       id: entry.id,
       name: entry.name,
       publicKey: entry.publicKey,
+      ...(entry.encryptionKey !== undefined
+        ? { encryptionKey: entry.encryptionKey }
+        : {}),
       type: entry.type,
       role: entry.type === "phone" ? "input" : "editor",
       lastSeenAt: entry.lastSeenAt,

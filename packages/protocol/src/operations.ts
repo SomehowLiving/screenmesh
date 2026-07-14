@@ -14,7 +14,10 @@ export type OperationType =
   | "PIN_OBJECT"
   | "MOVE_OBJECT"
   | "ADD_ATTACHMENT"
-  | "REVOKE_DEVICE";
+  | "REVOKE_DEVICE"
+  | "ROTATE_KEY"
+  | "YJS_UPDATE"
+  | "CONTINUE_ON_DEVICE";
 
 export interface Operation<TPayload = unknown> {
   operationId: string;
@@ -46,4 +49,32 @@ export interface ObjectRefPayload {
 
 export interface RevokeDevicePayload {
   deviceId: string;
+}
+
+/**
+ * A new workspace key, wrapped per-recipient via X25519 ECDH so a revoked
+ * device (which still holds old keys) cannot read it.
+ */
+export interface RotateKeyPayload {
+  epoch: number;
+  wrappedKeyB64: string;
+  nonceB64: string;
+}
+
+/** A Yjs document update for collaborative editing of an object. */
+export interface YjsUpdatePayload {
+  objectId: string;
+  updateB64: string;
+}
+
+/** Last-write-wins content replacement (checklist toggles, etc.). */
+export interface UpdateObjectPayload {
+  objectId: string;
+  content: unknown;
+  updatedAt: number;
+}
+
+/** Ask the target device to open this object for editing. */
+export interface ContinueOnDevicePayload {
+  objectId: string;
 }

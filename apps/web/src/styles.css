@@ -139,8 +139,9 @@ li.row {
 .status-failed, .status-expired { color: var(--bad); }
 
 .obj-text { white-space: pre-wrap; word-break: break-word; margin: 0.25rem 0; }
-.actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 .actions button { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
+.actions select { width: auto; padding: 0.25rem 0.5rem; font-size: 0.8rem; }
 
 .error {
   background: #7f1d1d;

@@ -12,6 +12,7 @@ import {
   createPairingPayload,
   decodePairingPayload,
   encodePairingPayload,
+  exportEncryptionPublicKey,
   exportPublicKey,
   exportWorkspaceKey,
   generateIdentity,
@@ -22,7 +23,7 @@ import {
 } from "@screenmesh/crypto";
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import { MeshEngine } from "@screenmesh/sync";
-import { WebSocketRelayTransport } from "@screenmesh/transport";
+import { WebRtcDirect, WebSocketRelayTransport } from "@screenmesh/transport";
 
 export interface LocalIdentity {
   deviceId: string;
@@ -31,6 +32,9 @@ export interface LocalIdentity {
   publicKey: CryptoKey;
   privateKey: CryptoKey;
   publicKeyB64: string;
+  encryptionPublicKey: CryptoKey;
+  encryptionPrivateKey: CryptoKey;
+  encryptionKeyB64: string;
 }
 
 export interface LocalWorkspace {
@@ -82,7 +86,13 @@ export function defaultDeviceType(): DeviceType {
 }
 
 function deviceInfo(me: LocalIdentity): DeviceInfo {
-  return { id: me.deviceId, name: me.name, publicKey: me.publicKeyB64, type: me.deviceType };
+  return {
+    id: me.deviceId,
+    name: me.name,
+    publicKey: me.publicKeyB64,
+    encryptionKey: me.encryptionKeyB64,
+    type: me.deviceType,
+  };
 }
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -116,8 +126,23 @@ export async function loadLocal(db: ScreenMeshDb): Promise<{
     db.settings.get("workspace"),
     db.settings.get("workspaceKey"),
   ]);
+  let localIdentity = (identity?.value as LocalIdentity | undefined) ?? null;
+  // Identities created before key-rotation support lack X25519 keys —
+  // upgrade in place (the Ed25519 identity and deviceId are preserved).
+  if (localIdentity && !localIdentity.encryptionPrivateKey) {
+    const pair = (await crypto.subtle.generateKey("X25519", false, [
+      "deriveBits",
+    ])) as CryptoKeyPair;
+    localIdentity = {
+      ...localIdentity,
+      encryptionPublicKey: pair.publicKey,
+      encryptionPrivateKey: pair.privateKey,
+      encryptionKeyB64: await exportEncryptionPublicKey(pair.publicKey),
+    };
+    await db.settings.put({ key: "identity", value: localIdentity });
+  }
   return {
-    identity: (identity?.value as LocalIdentity | undefined) ?? null,
+    identity: localIdentity,
     workspace: (workspace?.value as LocalWorkspace | undefined) ?? null,
     key: (key?.value as CryptoKey | undefined) ?? null,
   };
@@ -136,6 +161,9 @@ export async function createLocalIdentity(
     publicKey: generated.publicKey,
     privateKey: generated.privateKey,
     publicKeyB64: await exportPublicKey(generated.publicKey),
+    encryptionPublicKey: generated.encryptionPublicKey,
+    encryptionPrivateKey: generated.encryptionPrivateKey,
+    encryptionKeyB64: await exportEncryptionPublicKey(generated.encryptionPublicKey),
   };
   await db.settings.put({ key: "identity", value: identity });
   return identity;
@@ -270,6 +298,9 @@ export async function revokeDevice(
   const body: RevokeDeviceRequest = { ownerDeviceId: me.deviceId, deviceId };
   await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/revoke`, body);
   await engine.revokeDevice(deviceId);
+  // Rotate the workspace key so the revoked device (which still holds the
+  // old key) cannot decrypt anything sent from now on.
+  await engine.rotateWorkspaceKey();
 }
 
 /**
@@ -321,18 +352,34 @@ export function buildEngine(
     deviceId: me.deviceId,
     publicKey: me.publicKey,
     privateKey: me.privateKey,
+    encryptionPublicKey: me.encryptionPublicKey,
+    encryptionPrivateKey: me.encryptionPrivateKey,
   };
   const transport = new WebSocketRelayTransport(relayWsUrl(workspace.serverUrl), {
     deviceId: me.deviceId,
     workspaceId: workspace.id,
     sign: (data) => sign(identity, data),
   });
+  // Direct WebRTC data channels when the browser supports them; envelopes
+  // then bypass the relay whenever a peer connection is up.
+  const direct = WebRtcDirect.available()
+    ? new WebRtcDirect(transport, me.deviceId)
+    : undefined;
   const engine = new MeshEngine({
     db,
     identity,
     workspaceId: workspace.id,
     workspaceKey,
+    ownerDeviceId: workspace.ownerDeviceId,
     transport,
+    ...(direct
+      ? {
+          direct: {
+            trySend: (peerId: string, data: Uint8Array) => direct.trySend(peerId, data),
+            onMessage: (handler: (data: Uint8Array) => void) => direct.onMessage(handler),
+          },
+        }
+      : {}),
   });
   return { engine, transport };
 }

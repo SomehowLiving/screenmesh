@@ -147,6 +147,19 @@ export async function registerRelay(
             }
             break;
           }
+          case "signal": {
+            // WebRTC signaling: forwarded verbatim between authenticated
+            // devices; payload media never touches the server.
+            if (!state.deviceId || !state.workspaceId) {
+              return sendTo(socket, { type: "error", reason: "not authenticated" });
+            }
+            if (!registry.getDevice(state.workspaceId, msg.to)) return;
+            const peer = connections.get(msg.to);
+            if (peer && peer.readyState === peer.OPEN) {
+              sendTo(peer, { type: "signal", from: state.deviceId, data: msg.data });
+            }
+            break;
+          }
           case "ping": {
             sendTo(socket, { type: "pong" });
             break;

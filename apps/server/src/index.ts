@@ -5,7 +5,6 @@ import websocket from "@fastify/websocket";
 import { WorkspaceRegistry } from "./registry.js";
 import { registerWorkspaceRoutes } from "./workspaces.js";
 import { registerRelay, type RelayHandle } from "./relay.js";
-import { registerSignaling } from "./signaling.js";
 
 /**
  * The ScreenMesh server is deliberately minimal — the system must degrade
@@ -14,7 +13,7 @@ import { registerSignaling } from "./signaling.js";
  *   2. An encrypted relay when P2P fails (ciphertext only)
  *   3. Store-and-forward queueing for offline devices
  *   4. Best-effort presence hints
- *   5. WebSocket signaling for WebRTC (offers/answers/ICE) — upcoming
+ *   5. WebRTC signaling (offers/answers/ICE forwarded over the relay)
  * It never sees plaintext user content.
  *
  * All routes live under /api so the Vite dev server can proxy them
@@ -32,7 +31,6 @@ await app.register(
   async (scope) => {
     relay = await registerRelay(scope, registry);
     await registerWorkspaceRoutes(scope, registry, relay);
-    await registerSignaling(scope);
 
     scope.get("/health", async () => ({ ok: true }));
 

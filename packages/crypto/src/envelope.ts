@@ -23,6 +23,7 @@ function canonicalBytes(env: Omit<SecureEnvelope, "signature">): Uint8Array {
     env.createdAt,
     env.expiresAt ?? "",
     env.sequenceNumber,
+    env.keyEpoch,
   ].join("|");
   return new TextEncoder().encode(`${head}|${toBase64(env.ciphertext)}`);
 }
@@ -36,6 +37,8 @@ export interface SealParams {
   sequenceNumber: number;
   createdAt: number;
   expiresAt?: number;
+  /** Workspace-key generation used for encryption (default 0). */
+  keyEpoch?: number;
 }
 
 export async function sealEnvelope(params: SealParams): Promise<SecureEnvelope> {
@@ -53,6 +56,7 @@ export async function sealEnvelope(params: SealParams): Promise<SecureEnvelope> 
     createdAt: params.createdAt,
     ...(params.expiresAt !== undefined ? { expiresAt: params.expiresAt } : {}),
     sequenceNumber: params.sequenceNumber,
+    keyEpoch: params.keyEpoch ?? 0,
     ciphertext: combined,
   };
   const signature = await sign(params.identity, canonicalBytes(unsigned));

@@ -158,6 +158,9 @@ export class WorkspaceRegistry {
       id: device.id,
       name: device.name,
       publicKey: device.publicKey,
+      ...(device.encryptionKey !== undefined
+        ? { encryptionKey: device.encryptionKey }
+        : {}),
       type: device.type,
       online: isOnline(device.id),
       lastSeenAt: device.lastSeenAt,

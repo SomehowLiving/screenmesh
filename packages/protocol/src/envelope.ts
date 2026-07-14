@@ -15,6 +15,8 @@ export interface SecureEnvelope {
   expiresAt?: number;
   /** Monotonic per-sender counter for replay protection. */
   sequenceNumber: number;
+  /** Which workspace-key generation encrypted this payload (0 = initial). */
+  keyEpoch: number;
   /** AES-GCM nonce (12 bytes) prepended to the ciphertext. */
   ciphertext: Uint8Array;
   /** Ed25519 signature over the envelope fields + ciphertext. */
@@ -33,6 +35,7 @@ export interface EnvelopeJson {
   createdAt: number;
   expiresAt?: number;
   sequenceNumber: number;
+  keyEpoch: number;
   ciphertext: string;
   signature: string;
 }
@@ -47,6 +50,7 @@ export function envelopeToJson(env: SecureEnvelope): EnvelopeJson {
     createdAt: env.createdAt,
     ...(env.expiresAt !== undefined ? { expiresAt: env.expiresAt } : {}),
     sequenceNumber: env.sequenceNumber,
+    keyEpoch: env.keyEpoch,
     ciphertext: toBase64(env.ciphertext),
     signature: toBase64(env.signature),
   };
@@ -62,6 +66,7 @@ export function envelopeFromJson(json: EnvelopeJson): SecureEnvelope {
     createdAt: json.createdAt,
     ...(json.expiresAt !== undefined ? { expiresAt: json.expiresAt } : {}),
     sequenceNumber: json.sequenceNumber,
+    keyEpoch: json.keyEpoch ?? 0,
     ciphertext: fromBase64(json.ciphertext),
     signature: fromBase64(json.signature),
   };

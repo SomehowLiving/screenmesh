@@ -86,10 +86,22 @@ export function SendPanel(props: {
       }
       if (content) {
         const objectType = type === "auto" ? detectType(content) : type;
-        await props.engine.sendObject(
-          { type: objectType, content: { text: content } },
-          recipientIds,
-        );
+        if (objectType === "checklist") {
+          const items = content
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => ({ id: crypto.randomUUID(), text: line, done: false }));
+          await props.engine.sendObject(
+            { type: "checklist", content: { items } },
+            recipientIds,
+          );
+        } else {
+          await props.engine.sendObject(
+            { type: objectType, content: { text: content } },
+            recipientIds,
+          );
+        }
         setText("");
       }
       setNote(
@@ -106,7 +118,11 @@ export function SendPanel(props: {
     <section className="card stack">
       <h2>Send to device</h2>
       <textarea
-        placeholder="Paste a link, command, snippet, or note…"
+        placeholder={
+          type === "checklist"
+            ? "One checklist item per line…"
+            : "Paste a link, command, snippet, or note…"
+        }
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
@@ -115,6 +131,7 @@ export function SendPanel(props: {
         <option value="text">Text</option>
         <option value="link">Link</option>
         <option value="code">Code / command</option>
+        <option value="checklist">Checklist (one item per line)</option>
       </select>
       {file ? (
         <div className="row" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>

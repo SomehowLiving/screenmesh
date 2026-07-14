@@ -85,7 +85,11 @@ Store–carry–forward bundles additionally carry `hopLimit` and `expiresAt` so
 
 ## 5. Forward secrecy and key rotation
 
-Workspace/session keys rotate periodically so that compromising a current key does not expose past traffic. Rotation also implements revocation: a revoked device simply never receives the next key. The MVP ships rotating workspace keys; a proper ratcheting session protocol (Noise / Double Ratchet / MLS) is the planned upgrade path.
+Workspace keys are **epoch-versioned**. Every envelope is tagged with the epoch that encrypted it (signed, so it can't be tampered with), and devices keep all epochs they've been given so history and in-flight messages stay readable.
+
+Rotation implements revocation: after revoking a device, the owner generates a fresh workspace key and sends it to each remaining device **wrapped via X25519 ECDH** (a pairwise AES key derived from the owner's and recipient's key-agreement keys). The revoked device still holds old epochs, but it cannot unwrap the new key — everything sent after rotation is cryptographically out of its reach, in addition to being blocked at the relay.
+
+A proper ratcheting session protocol (Noise / Double Ratchet / MLS) remains the upgrade path for per-message forward secrecy; running the ECDH secret through HKDF is a planned hardening step.
 
 ## 6. Honest limitations (threat model)
 

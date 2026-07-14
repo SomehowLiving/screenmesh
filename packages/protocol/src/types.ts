@@ -8,6 +8,8 @@ export interface Device {
   name: string;
   /** Base64-encoded Ed25519 public key, exchanged at pairing. */
   publicKey: string;
+  /** Base64 X25519 public key for key-agreement. */
+  encryptionKey?: string;
   type: DeviceType;
   role: DeviceRole;
   lastSeenAt: number;
@@ -19,7 +21,10 @@ export interface Device {
 export interface DeviceInfo {
   id: string;
   name: string;
+  /** Base64 Ed25519 signing public key. */
   publicKey: string;
+  /** Base64 X25519 public key for key-agreement (workspace key rotation). */
+  encryptionKey?: string;
   type: DeviceType;
 }
 
@@ -86,6 +91,17 @@ export interface FileContent {
   mimeType: string;
   size: number;
   dataB64: string;
+}
+
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+/** Content shape for "checklist" objects. */
+export interface ChecklistContent {
+  items: ChecklistItem[];
 }
 
 /** Options attached to a send action ("expire after 1 hour", etc.). */

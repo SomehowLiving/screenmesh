@@ -20,6 +20,12 @@ export interface SeenMessage {
   seenAt: number;
 }
 
+/** Persisted Yjs document state for collaboratively edited objects. */
+export interface YDocState {
+  objectId: string;
+  state: Uint8Array;
+}
+
 /**
  * Local-first persistence (IndexedDB via Dexie). Every device stores its
  * own copy of the relevant workspace data; the server is never the primary
@@ -37,6 +43,7 @@ export class ScreenMeshDb extends Dexie {
   carried!: Table<DeliveryBundle, string>;
   settings!: Table<SettingEntry, string>;
   seen!: Table<SeenMessage, string>;
+  ydocs!: Table<YDocState, string>;
 
   constructor(name = "screenmesh") {
     super(name);
@@ -52,6 +59,9 @@ export class ScreenMeshDb extends Dexie {
     this.version(2).stores({
       settings: "key",
       seen: "messageId, seenAt",
+    });
+    this.version(3).stores({
+      ydocs: "objectId",
     });
   }
 }

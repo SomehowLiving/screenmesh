@@ -11,19 +11,28 @@ import { fromBase64, toBase64 } from "@screenmesh/protocol";
 
 export interface DeviceIdentity {
   deviceId: string;
+  /** Ed25519 — signing. */
   publicKey: CryptoKey;
   privateKey: CryptoKey;
+  /** X25519 — key agreement (workspace key rotation). */
+  encryptionPublicKey: CryptoKey;
+  encryptionPrivateKey: CryptoKey;
 }
 
 export async function generateIdentity(): Promise<DeviceIdentity> {
-  const keyPair = (await crypto.subtle.generateKey("Ed25519", false, [
+  const signing = (await crypto.subtle.generateKey("Ed25519", false, [
     "sign",
     "verify",
   ])) as CryptoKeyPair;
+  const agreement = (await crypto.subtle.generateKey("X25519", false, [
+    "deriveBits",
+  ])) as CryptoKeyPair;
   return {
     deviceId: crypto.randomUUID(),
-    publicKey: keyPair.publicKey,
-    privateKey: keyPair.privateKey,
+    publicKey: signing.publicKey,
+    privateKey: signing.privateKey,
+    encryptionPublicKey: agreement.publicKey,
+    encryptionPrivateKey: agreement.privateKey,
   };
 }
 

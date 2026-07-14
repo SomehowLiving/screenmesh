@@ -39,6 +39,7 @@ export class WebSocketRelayTransport implements MeshTransport {
   private statusHandlers: Array<(status: TransportStatus) => void> = [];
   private presenceHandlers: Array<(devices: PresenceEntry[]) => void> = [];
   private authErrorHandlers: Array<(reason: string) => void> = [];
+  private signalHandlers: Array<(from: string, data: unknown) => void> = [];
 
   constructor(
     private readonly relayWsUrl: string,
@@ -124,6 +125,10 @@ export class WebSocketRelayTransport implements MeshTransport {
               for (const handler of this.presenceHandlers) handler(msg.devices);
               break;
             }
+            case "signal": {
+              for (const handler of this.signalHandlers) handler(msg.from, msg.data);
+              break;
+            }
             default:
               break;
           }
@@ -171,6 +176,19 @@ export class WebSocketRelayTransport implements MeshTransport {
 
   sendEnvelope(envelope: EnvelopeJson): void {
     this.sendRaw({ type: "envelope", envelope });
+  }
+
+  /** WebRTC signaling: send an offer/answer/ICE blob to a peer. */
+  sendSignal(to: string, data: unknown): void {
+    this.sendRaw({ type: "signal", to, data });
+  }
+
+  /** WebRTC signaling: receive blobs from peers. Returns an unsubscriber. */
+  subscribeSignal(handler: (from: string, data: unknown) => void): () => void {
+    this.signalHandlers.push(handler);
+    return () => {
+      this.signalHandlers = this.signalHandlers.filter((h) => h !== handler);
+    };
   }
 
   // --- MeshTransport interface ---
