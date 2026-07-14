@@ -62,19 +62,41 @@ function relayWsUrl(serverUrl: string): string {
   return `${serverUrl.replace(/^http/, "ws")}/relay`;
 }
 
+export interface LanCandidate {
+  name: string;
+  address: string;
+  origin: string;
+}
+
+/**
+ * Every LAN address this machine has, best guess first (server-side
+ * ranking excludes VPN/virtual adapters by interface name — see
+ * apps/server/src/index.ts /info). Exposed so the pairing panel can offer
+ * a manual override if the auto-picked address still isn't reachable
+ * (e.g., an unusual network setup the name-based heuristic doesn't catch).
+ */
+export async function listLanCandidates(): Promise<LanCandidate[]> {
+  const { protocol, port } = location;
+  const res = await fetch(`${serverBaseUrl()}/info`);
+  const data = (await res.json()) as { interfaces: Array<{ name: string; address: string }> };
+  return data.interfaces.map(({ name, address }) => ({
+    name,
+    address,
+    origin: `${protocol}//${address}${port ? `:${port}` : ""}`,
+  }));
+}
+
 /**
  * An origin OTHER devices on the network can reach. When the page is open
  * on localhost, join links/QRs would be useless to a phone — ask the
- * server for this machine's LAN address and use that instead.
+ * server for this machine's best-guess LAN address and use that instead.
  */
 export async function shareableOrigin(): Promise<string> {
-  const { protocol, hostname, port } = location;
+  const { hostname } = location;
   if (hostname !== "localhost" && hostname !== "127.0.0.1") return location.origin;
   try {
-    const res = await fetch(`${serverBaseUrl()}/info`);
-    const data = (await res.json()) as { addresses: string[] };
-    const lanIp = data.addresses[0];
-    if (lanIp) return `${protocol}//${lanIp}${port ? `:${port}` : ""}`;
+    const candidates = await listLanCandidates();
+    if (candidates[0]) return candidates[0].origin;
   } catch {
     /* fall back to the local origin */
   }
@@ -264,16 +286,23 @@ export async function joinWorkspaceFromPayload(
   return { workspace, key };
 }
 
-/** Owner-only: mint a fresh single-use pairing token and QR payload. */
+/**
+ * Owner-only: mint a fresh single-use pairing token and QR payload.
+ * Pass `originOverride` (an entry from listLanCandidates()) to point the
+ * join link at a specific network interface when auto-detection guesses
+ * wrong — e.g., a VPN adapter sharing the same address family as the
+ * real LAN.
+ */
 export async function rotatePairing(
   me: LocalIdentity,
   workspace: LocalWorkspace,
   workspaceKey: CryptoKey,
+  originOverride?: string,
 ): Promise<PairingPayload> {
   const pairing = createPairingPayload({
     workspaceId: workspace.id,
     workspaceKey: await exportWorkspaceKey(workspaceKey),
-    serverUrl: `${await shareableOrigin()}/api`,
+    serverUrl: `${originOverride ?? (await shareableOrigin())}/api`,
     now: Date.now(),
   });
   const body: RotatePairingRequest = {

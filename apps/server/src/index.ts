@@ -34,27 +34,47 @@ await app.register(
 
     scope.get("/health", async () => ({ ok: true }));
 
-    /** LAN addresses of this machine, so the PWA can build join links
-     *  that other devices on the network can actually reach. Typical
-     *  home/office LANs are 192.168.* or 10.*; 172.16–31.* is usually a
-     *  WSL/Docker/Hyper-V virtual adapter, so rank it last. */
+    /**
+     * LAN addresses of this machine, so the PWA can build join links that
+     * other devices on the network can actually reach.
+     *
+     * IP prefix alone is NOT a reliable signal: a VPN client (Pritunl,
+     * WireGuard, Tailscale, ...) commonly hands out a 10.x address too,
+     * which ties with a real 10.x LAN and can outrank it depending on
+     * enumeration order — producing a join link that points at the VPN
+     * tunnel, which other devices can't reach at all (silent timeout).
+     * Rank primarily by INTERFACE NAME (deprioritize anything that looks
+     * virtual/VPN/tunnel), then by IP prefix as a tiebreaker. Return every
+     * candidate with its interface name so the UI can offer a manual
+     * override if auto-detection still guesses wrong.
+     */
     scope.get("/info", async () => {
-      const addresses: string[] = [];
-      for (const interfaces of Object.values(os.networkInterfaces())) {
+      const VIRTUAL_NAME_PATTERN =
+        /vpn|pritunl|tailscale|zerotier|wireguard|openvpn|nordlynx|tap|tun\d|ppp|utun|virtual|vethernet|hyper-v|wsl|docker|loopback/i;
+
+      const candidates: Array<{ name: string; address: string }> = [];
+      for (const [name, interfaces] of Object.entries(os.networkInterfaces())) {
         for (const iface of interfaces ?? []) {
           if (iface.family === "IPv4" && !iface.internal) {
-            addresses.push(iface.address);
+            candidates.push({ name, address: iface.address });
           }
         }
       }
-      const rank = (ip: string): number => {
+
+      const ipRank = (ip: string): number => {
         if (ip.startsWith("192.168.")) return 0;
         if (ip.startsWith("10.")) return 1;
-        if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 3;
-        return 2;
+        if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2;
+        return 3;
       };
-      addresses.sort((a, b) => rank(a) - rank(b));
-      return { addresses };
+      const score = (c: { name: string; address: string }): number =>
+        (VIRTUAL_NAME_PATTERN.test(c.name) ? 100 : 0) + ipRank(c.address);
+
+      candidates.sort((a, b) => score(a) - score(b));
+      return {
+        addresses: candidates.map((c) => c.address),
+        interfaces: candidates,
+      };
     });
   },
   { prefix: "/api" },

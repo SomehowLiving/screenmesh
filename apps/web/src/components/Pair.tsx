@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import type { PairingPayload } from "@screenmesh/protocol";
 import {
+  listLanCandidates,
   makeJoinUrl,
   rotatePairing,
+  type LanCandidate,
   type LocalIdentity,
   type LocalWorkspace,
 } from "../lib/app.js";
@@ -16,16 +18,18 @@ export function PairPanel(props: {
 }) {
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
   const [pairing, setPairing] = useState<PairingPayload | null>(props.initialPairing);
+  const [candidates, setCandidates] = useState<LanCandidate[]>([]);
+  const [selectedOrigin, setSelectedOrigin] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const joinUrl = pairing ? makeJoinUrl(pairing) : null;
 
-  async function regenerate() {
+  async function regenerate(originOverride?: string) {
     try {
       setError(null);
-      setPairing(await rotatePairing(props.me, props.workspace, props.workspaceKey));
+      setPairing(await rotatePairing(props.me, props.workspace, props.workspaceKey, originOverride));
       setCopied(false);
     } catch (err) {
       setError(`Could not create pairing code: ${err instanceof Error ? err.message : err}`);
@@ -33,7 +37,16 @@ export function PairPanel(props: {
   }
 
   useEffect(() => {
-    if (isOwner && !pairing) void regenerate();
+    if (!isOwner) return;
+    void listLanCandidates()
+      .then((found) => {
+        setCandidates(found);
+        if (found[0]) setSelectedOrigin(found[0].origin);
+      })
+      .catch(() => {
+        /* /info unreachable (e.g. non-localhost origin) — auto-detect handles it */
+      });
+    if (!pairing) void regenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -80,6 +93,28 @@ export function PairPanel(props: {
             certificate warning once (self-signed dev cert); choose{" "}
             <em>Advanced&nbsp;→&nbsp;Proceed</em>.
             </p>
+          )}
+          {candidates.length > 1 && (
+            <div className="stack">
+              <p className="muted">
+                Timing out on the other device? This machine has multiple
+                networks — pick the one the other device is actually on
+                (VPNs and virtual adapters are usually wrong):
+              </p>
+              <select
+                value={selectedOrigin}
+                onChange={(e) => setSelectedOrigin(e.target.value)}
+              >
+                {candidates.map((c) => (
+                  <option key={c.origin} value={c.origin}>
+                    {c.name} — {c.address}
+                  </option>
+                ))}
+              </select>
+              <button className="ghost" onClick={() => void regenerate(selectedOrigin)}>
+                Use this network
+              </button>
+            </div>
           )}
           {pairing && (
             <p className="muted">
