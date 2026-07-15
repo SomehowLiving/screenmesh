@@ -23,8 +23,10 @@ export function DevicesPanel(props: {
   engine: MeshEngine;
 }) {
   const devices = useLiveQuery(() => props.db.devices.toArray(), [props.db]) ?? [];
+  const carrying = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
   const [note, setNote] = useState<string | null>(null);
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
+  const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "an offline device";
 
   async function remove(deviceId: string, name: string) {
     if (!window.confirm(`Remove "${name}" from this workspace? It will lose relay access immediately.`)) {
@@ -70,6 +72,13 @@ export function DevicesPanel(props: {
           </li>
         ))}
       </ul>
+      {carrying.length > 0 && (
+        <p className="muted">
+          Carrying {carrying.length} item{carrying.length === 1 ? "" : "s"} for{" "}
+          {[...new Set(carrying.map((b) => nameOf(b.destinationDeviceId)))].join(", ")} —
+          delivered automatically once reachable.
+        </p>
+      )}
       {note && <p className="muted">{note}</p>}
     </section>
   );

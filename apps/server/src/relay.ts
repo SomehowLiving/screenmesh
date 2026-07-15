@@ -73,6 +73,18 @@ export async function registerRelay(
     }
   };
 
+  /** Route to the recipient if online, else queue (shared by envelope/forward). */
+  const routeOrQueue = (envelope: EnvelopeJson): void => {
+    const target = connections.get(envelope.recipientDeviceId);
+    if (target && target.readyState === target.OPEN) {
+      sendTo(target, { type: "envelope", envelope });
+    } else {
+      const queue = queues.get(envelope.recipientDeviceId) ?? [];
+      if (queue.length < MAX_QUEUE_PER_DEVICE) queue.push(envelope);
+      queues.set(envelope.recipientDeviceId, queue);
+    }
+  };
+
   app.get("/relay", { websocket: true }, (socket) => {
     const state: { deviceId?: string; workspaceId?: string; nonce: string } = {
       nonce: crypto.randomUUID(),
@@ -137,14 +149,21 @@ export async function registerRelay(
             ) {
               return sendTo(socket, { type: "error", reason: "sender mismatch" });
             }
-            const target = connections.get(envelope.recipientDeviceId);
-            if (target && target.readyState === target.OPEN) {
-              sendTo(target, { type: "envelope", envelope });
-            } else {
-              const queue = queues.get(envelope.recipientDeviceId) ?? [];
-              if (queue.length < MAX_QUEUE_PER_DEVICE) queue.push(envelope);
-              queues.set(envelope.recipientDeviceId, queue);
+            routeOrQueue(envelope);
+            break;
+          }
+          case "forward": {
+            // Store-carry-forward: a carrier relays someone else's already
+            // signed envelope. senderDeviceId legitimately differs from
+            // this connection's device — only the workspace is checked
+            // here; the destination verifies the inner signature itself.
+            if (!state.deviceId || !state.workspaceId) {
+              return sendTo(socket, { type: "error", reason: "not authenticated" });
             }
+            if (msg.envelope.workspaceId !== state.workspaceId) {
+              return sendTo(socket, { type: "error", reason: "workspace mismatch" });
+            }
+            routeOrQueue(msg.envelope);
             break;
           }
           case "signal": {

@@ -178,6 +178,15 @@ export class WebSocketRelayTransport implements MeshTransport {
     this.sendRaw({ type: "envelope", envelope });
   }
 
+  /**
+   * Store-carry-forward: relay an envelope we did NOT create on behalf of
+   * its original sender. The relay skips its usual sender-identity check
+   * for this message type — see docs/Security.md.
+   */
+  forwardEnvelope(envelope: EnvelopeJson): void {
+    this.sendRaw({ type: "forward", envelope });
+  }
+
   /** WebRTC signaling: send an offer/answer/ICE blob to a peer. */
   sendSignal(to: string, data: unknown): void {
     this.sendRaw({ type: "signal", to, data });

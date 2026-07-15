@@ -1,8 +1,8 @@
 ﻿/**
  * Full-stack engine smoke test against a running relay server:
  * three MeshEngines (IndexedDB via fake-indexeddb) exchange objects and
- * exercise the delivery lifecycle, file content, revocation, and
- * workspace-key rotation.
+ * exercise the delivery lifecycle, file content, revocation, key
+ * rotation, expiring objects, delivery options, and store-carry-forward.
  *
  * Run: pnpm exec tsx packages/sync/scripts/engine-smoke.ts
  */
@@ -12,13 +12,22 @@ import {
   exportPublicKey,
   generateIdentity,
   generateWorkspaceKey,
+  sealEnvelope,
   sign,
   type DeviceIdentity,
 } from "@screenmesh/crypto";
 import { ScreenMeshDb } from "@screenmesh/storage";
 import { WebSocketRelayTransport } from "@screenmesh/transport";
 import { MeshEngine } from "../src/engine.js";
-import type { DeviceInfo, DeviceType } from "@screenmesh/protocol";
+import {
+  DEFAULT_HOP_LIMIT,
+  envelopeToJson,
+  type DeviceInfo,
+  type DeviceType,
+} from "@screenmesh/protocol";
+
+/** Short so tests observe expiry/carry sweeps without waiting ~15s. */
+const TEST_SWEEP_INTERVAL_MS = 500;
 
 const SERVER = "http://127.0.0.1:8787/api";
 const RELAY = "ws://127.0.0.1:8787/api/relay";
@@ -74,6 +83,7 @@ async function makeEngine(
     workspaceKey,
     ownerDeviceId,
     transport,
+    sweepIntervalMs: TEST_SWEEP_INTERVAL_MS,
   });
   return { engine, db };
 }
@@ -106,7 +116,7 @@ async function main(): Promise<void> {
     pairingToken: token2,
     device: await info(c, "Engine C", "tablet"),
   });
-  console.log("[1/11] workspace registered with three devices");
+  console.log("[1/16] workspace registered with three devices");
 
   const ea = await makeEngine(a, "engine-a", workspaceId, workspaceKey, a.deviceId);
   const eb = await makeEngine(b, "engine-b", workspaceId, workspaceKey, a.deviceId);
@@ -122,7 +132,7 @@ async function main(): Promise<void> {
       (await ec.db.devices.count()) === 3
     );
   });
-  console.log("[2/11] all engines connected, presence synced");
+  console.log("[2/16] all engines connected, presence synced");
 
   const object = await ea.engine.sendObject(
     { type: "code", content: { text: "pnpm run integration-test" } },
@@ -133,20 +143,20 @@ async function main(): Promise<void> {
   if ((received?.content as { text: string }).text !== "pnpm run integration-test") {
     throw new Error("content mismatch");
   }
-  console.log("[3/11] object created on A appeared decrypted on B");
+  console.log("[3/16] object created on A appeared decrypted on B");
 
   await waitFor("delivery ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[4/11] A's delivery status advanced to delivered");
+  console.log("[4/16] A's delivery status advanced to delivered");
 
   await eb.engine.markOpened(object.id);
   await waitFor("opened ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "opened";
   });
-  console.log("[5/11] opened receipt propagated back to A");
+  console.log("[5/16] opened receipt propagated back to A");
 
   const pixels = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]);
   const image = await ea.engine.sendObject(
@@ -166,7 +176,7 @@ async function main(): Promise<void> {
   if ((receivedImage?.content as { dataB64: string }).dataB64 !== pixels.toString("base64")) {
     throw new Error("image bytes corrupted in transit");
   }
-  console.log("[6/11] image object with binary content arrived intact");
+  console.log("[6/16] image object with binary content arrived intact");
 
   // Checklist: created on A, toggled on B, LWW-merged back on A.
   const checklist = await ea.engine.sendObject(
@@ -193,7 +203,7 @@ async function main(): Promise<void> {
     const items = (obj?.content as { items: Array<{ id: string; done: boolean }> })?.items;
     return items?.find((i) => i.id === "i1")?.done === true;
   });
-  console.log("[7/11] checklist toggled on B synced back to A");
+  console.log("[7/16] checklist toggled on B synced back to A");
 
   // Yjs: concurrent edits on A and B merge instead of overwriting.
   const note = await ea.engine.sendObject(
@@ -216,7 +226,7 @@ async function main(): Promise<void> {
       onA.includes("shared note")
     );
   });
-  console.log("[8/11] concurrent Yjs edits merged identically on both devices");
+  console.log("[8/16] concurrent Yjs edits merged identically on both devices");
 
   // Continue-on-device: A hands the note to B, which gets a focus request.
   await ea.engine.continueOnDevice(note.id, b.deviceId);
@@ -224,7 +234,148 @@ async function main(): Promise<void> {
     const focus = await eb.db.settings.get("focusObject");
     return (focus?.value as { objectId: string } | undefined)?.objectId === note.id;
   });
-  console.log("[9/11] continue-on-device focus request arrived on B");
+  console.log("[9/16] continue-on-device focus request arrived on B");
+
+  // Expiring objects: swept away on both ends once expiresAt passes.
+  const expiring = await ea.engine.sendObject(
+    { type: "text", content: { text: "self-destructing note" } },
+    [b.deviceId],
+    { expiresAt: Date.now() + 1200 },
+  );
+  await waitFor("expiring note to reach B", async () => !!(await eb.db.objects.get(expiring.id)));
+  await waitFor("expiring note swept on A", async () => !(await ea.db.objects.get(expiring.id)));
+  await waitFor("expiring note swept on B", async () => !(await eb.db.objects.get(expiring.id)));
+  await waitFor("A's delivery marked expired", async () => {
+    const delivery = await ea.db.deliveries.where("objectId").equals(expiring.id).first();
+    return delivery?.status === "expired";
+  });
+  console.log("[10/16] expiring object swept from both devices, delivery marked expired");
+
+  // deleteAfterOpening: recipient's copy vanishes right after markOpened.
+  const selfDestruct = await ea.engine.sendObject(
+    { type: "text", content: { text: "read once" } },
+    [b.deviceId],
+    { deleteAfterOpening: true },
+  );
+  await waitFor("read-once note to reach B", async () => !!(await eb.db.objects.get(selfDestruct.id)));
+  await eb.engine.markOpened(selfDestruct.id);
+  await waitFor("A sees it opened", async () => {
+    const delivery = await ea.db.deliveries.where("objectId").equals(selfDestruct.id).first();
+    return delivery?.status === "opened";
+  });
+  if (await eb.db.objects.get(selfDestruct.id)) {
+    throw new Error("deleteAfterOpening did not remove the object on the recipient");
+  }
+  console.log("[11/16] deleteAfterOpening removed B's copy right after opening");
+
+  // requireConfirmation + accept: gated as "pending" until B explicitly accepts.
+  const gated = await ea.engine.sendObject(
+    { type: "text", content: { text: "please confirm" } },
+    [b.deviceId],
+    { requireConfirmation: true },
+  );
+  await waitFor("gated note to reach B", async () => !!(await eb.db.objects.get(gated.id)));
+  const gatedOnB = await eb.db.deliveries.where("objectId").equals(gated.id).first();
+  if (gatedOnB?.status !== "pending") {
+    throw new Error(`expected B's delivery to be pending, got ${gatedOnB?.status}`);
+  }
+  const gatedOnAPreAccept = await ea.db.deliveries.where("objectId").equals(gated.id).first();
+  if (gatedOnAPreAccept?.status === "delivered") {
+    throw new Error("A should not see 'delivered' before B accepts");
+  }
+  await eb.engine.acceptObject(gated.id);
+  await waitFor("A sees the accepted delivery", async () => {
+    const delivery = await ea.db.deliveries.where("objectId").equals(gated.id).first();
+    return delivery?.status === "delivered";
+  });
+  console.log("[12/16] requireConfirmation gated delivery until accepted");
+
+  // requireConfirmation + reject: B declines, A is told, B keeps nothing.
+  const declined = await ea.engine.sendObject(
+    { type: "text", content: { text: "please confirm (this one gets rejected)" } },
+    [b.deviceId],
+    { requireConfirmation: true },
+  );
+  await waitFor("declined note to reach B", async () => !!(await eb.db.objects.get(declined.id)));
+  await eb.engine.rejectObject(declined.id);
+  await waitFor("A sees the rejection", async () => {
+    const delivery = await ea.db.deliveries.where("objectId").equals(declined.id).first();
+    return delivery?.status === "rejected";
+  });
+  if (await eb.db.objects.get(declined.id)) {
+    throw new Error("rejectObject should have removed B's local copy");
+  }
+  console.log("[13/16] requireConfirmation reject notified A and cleared B's copy");
+
+  // Store–carry–forward: simulate a bundle addressed to C that couldn't be
+  // delivered directly (e.g. sender had no route at send time) by sealing
+  // it and dropping it straight into A's outbox — exactly the shape
+  // sendObject would have produced. B (online, not the destination) should
+  // pick it up as a carrier via the periodic sweep, and forward it to C.
+  const carriedObjectId = crypto.randomUUID();
+  const carriedObject = {
+    id: carriedObjectId,
+    workspaceId,
+    type: "text" as const,
+    content: { text: "carried via B" },
+    createdBy: a.deviceId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  const carryEnvelope = await sealEnvelope({
+    identity: a,
+    recipientDeviceId: c.deviceId,
+    workspaceId,
+    workspaceKey,
+    plaintext: new TextEncoder().encode(
+      JSON.stringify({
+        ops: [
+          {
+            operationId: crypto.randomUUID(),
+            deviceId: a.deviceId,
+            workspaceId,
+            type: "CREATE_OBJECT",
+            objectId: carriedObjectId,
+            timestamp: Date.now(),
+            payload: { object: carriedObject },
+          },
+        ],
+      }),
+    ),
+    sequenceNumber: 999999,
+    createdAt: Date.now(),
+  });
+  const carryBytes = new TextEncoder().encode(JSON.stringify(envelopeToJson(carryEnvelope)));
+  await ea.db.outbox.add({
+    bundleId: carryEnvelope.messageId,
+    sourceDeviceId: a.deviceId,
+    destinationDeviceId: c.deviceId,
+    workspaceId,
+    encryptedPayload: carryBytes,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+    hopLimit: DEFAULT_HOP_LIMIT,
+    signature: carryEnvelope.signature,
+    offeredTo: [],
+  });
+  await waitFor("B picks up the bundle as a carrier", async () => {
+    return !!(await eb.db.carried.get(carryEnvelope.messageId));
+  });
+  await waitFor("A's outbox records the hand-off", async () => {
+    const bundle = await ea.db.outbox.get(carryEnvelope.messageId);
+    return !!bundle?.offeredTo?.includes(b.deviceId) && bundle.hopLimit === DEFAULT_HOP_LIMIT - 1;
+  });
+  await waitFor("C receives the carried object from B", async () => {
+    return !!(await ec.db.objects.get(carriedObjectId));
+  });
+  const carriedOnC = await ec.db.objects.get(carriedObjectId);
+  if ((carriedOnC?.content as { text: string })?.text !== "carried via B") {
+    throw new Error("carried object content mismatch on C");
+  }
+  await waitFor("B's carried copy is cleared after forwarding", async () => {
+    return !(await eb.db.carried.get(carryEnvelope.messageId));
+  });
+  console.log("[14/16] store-carry-forward: B carried A's bundle and delivered it to C");
 
   // Revoke C, then rotate the workspace key.
   const revokeRes = await fetch(`${SERVER}/workspaces/${workspaceId}/revoke`, {
@@ -252,7 +403,7 @@ async function main(): Promise<void> {
   await waitFor("C removed from A's roster", async () => {
     return !(await ea.db.devices.get(c.deviceId));
   });
-  console.log("[10/11] revoked device rejected by relay and pruned from roster");
+  console.log("[15/16] revoked device rejected by relay and pruned from roster");
 
   // B must have adopted epoch 1 via the ECDH-wrapped ROTATE_KEY op:
   // a fresh object from A (sealed under epoch 1) must still decrypt on B.
@@ -267,7 +418,7 @@ async function main(): Promise<void> {
   if ((rotatedObj?.content as { text: string }).text !== "sealed under the rotated key") {
     throw new Error("post-rotation content mismatch");
   }
-  console.log("[11/11] workspace key rotated; B decrypts epoch-1 traffic, C is locked out");
+  console.log("[16/16] workspace key rotated; B decrypts epoch-1 traffic, C is locked out");
 
   await ea.engine.stop();
   await eb.engine.stop();

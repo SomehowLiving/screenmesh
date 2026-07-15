@@ -135,8 +135,9 @@ li.row {
 .status-queued { color: var(--warn); }
 .status-sending { color: var(--warn); }
 .status-delivered { color: var(--accent); }
+.status-pending { color: var(--warn); }
 .status-opened { color: var(--ok); }
-.status-failed, .status-expired { color: var(--bad); }
+.status-rejected, .status-failed, .status-expired { color: var(--bad); }
 
 .obj-text { white-space: pre-wrap; word-break: break-word; margin: 0.25rem 0; }
 .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }

@@ -1,12 +1,15 @@
 import * as Y from "yjs";
 import {
+  DEFAULT_HOP_LIMIT,
   envelopeFromJson,
   envelopeToJson,
   fromBase64,
   toBase64,
+  type CarryBundlePayload,
   type ContinueOnDevicePayload,
   type CreateObjectPayload,
   type Delivery,
+  type DeliveryBundle,
   type Device,
   type EnvelopeJson,
   type MeshObject,
@@ -40,6 +43,8 @@ import type { WebSocketRelayTransport } from "@screenmesh/transport";
 
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SEEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** How often to sweep expired objects/bundles and advance store-carry-forward. */
+const DEFAULT_SWEEP_INTERVAL_MS = 15_000;
 
 /** Object types whose text is collaboratively editable via Yjs. */
 const EDITABLE_TYPES = new Set(["text", "code", "link"]);
@@ -81,6 +86,8 @@ export interface EngineConfig {
   /** Optional peer-to-peer channel tried before the relay (WebRTC). */
   direct?: DirectChannel;
   now?: () => number;
+  /** Override the periodic sweep cadence (tests use a short interval). */
+  sweepIntervalMs?: number;
 }
 
 /**
@@ -98,6 +105,7 @@ export class MeshEngine {
   private currentEpoch = 0;
   /** In-memory Yjs docs for collaboratively edited objects. */
   private readonly ydocs = new Map<string, Y.Doc>();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly cfg: EngineConfig) {
     this.keys.set(0, cfg.workspaceKey);
@@ -140,9 +148,19 @@ export class MeshEngine {
       if (status === "connected") void this.drainOutbox();
     });
     await transport.open();
+
+    void this.periodicSweep();
+    this.sweepTimer = setInterval(
+      () => void this.periodicSweep(),
+      this.cfg.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
+    );
   }
 
   async stop(): Promise<void> {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     await this.cfg.transport.disconnect();
   }
 
@@ -185,6 +203,7 @@ export class MeshEngine {
         destinationDeviceId: recipientId,
         status: "queued",
         createdAt: now,
+        ...(Object.keys(options).length > 0 ? { options } : {}),
       };
       await this.cfg.db.deliveries.add(delivery);
       const ops: Operation<unknown>[] = [
@@ -206,7 +225,10 @@ export class MeshEngine {
           options,
         } satisfies SendToDevicePayload),
       );
-      const sentLive = await this.sendOps(recipientId, ops);
+      // Real object deliveries are carry-eligible: if this recipient is
+      // unreachable directly, another online device may later carry the
+      // encrypted bundle on our behalf (docs/Architecture.md §2).
+      const sentLive = await this.sendOps(recipientId, ops, DEFAULT_HOP_LIMIT);
       if (sentLive) {
         await this.cfg.db.deliveries.update(delivery.id, { status: "sending" });
       }
@@ -281,7 +303,7 @@ export class MeshEngine {
         objectId,
       } satisfies ContinueOnDevicePayload),
     );
-    await this.sendOps(deviceId, ops);
+    await this.sendOps(deviceId, ops, DEFAULT_HOP_LIMIT);
   }
 
   /** Recipient-side: mark an object opened and notify the sender. */
@@ -293,7 +315,7 @@ export class MeshEngine {
       .equals(objectId)
       .and((d) => d.destinationDeviceId === this.me)
       .first();
-    if (!delivery || delivery.status === "opened") return;
+    if (!delivery || delivery.status === "opened" || delivery.status === "pending") return;
     await this.cfg.db.deliveries.update(delivery.id, {
       status: "opened",
       openedAt: this.now(),
@@ -301,12 +323,62 @@ export class MeshEngine {
     await this.sendOps(object.createdBy, [
       this.makeOp("MARK_OPENED", objectId, { objectId } satisfies ObjectRefPayload),
     ]);
+    if (delivery.options?.deleteAfterOpening) {
+      await this.deleteObjectLocal(objectId);
+    }
+  }
+
+  /**
+   * Recipient-side: accept a requireConfirmation delivery — makes it act
+   * like a normal delivery from here on (status -> delivered, sender
+   * notified) so open/copy/edit actions become available in the UI.
+   */
+  async acceptObject(objectId: string): Promise<void> {
+    const delivery = await this.cfg.db.deliveries
+      .where("objectId")
+      .equals(objectId)
+      .and((d) => d.destinationDeviceId === this.me && d.status === "pending")
+      .first();
+    if (!delivery) return;
+    const now = this.now();
+    await this.cfg.db.deliveries.update(delivery.id, {
+      status: "delivered",
+      deliveredAt: now,
+    });
+    await this.sendOps(delivery.sourceDeviceId, [
+      this.makeOp("MARK_DELIVERED", objectId, { objectId } satisfies ObjectRefPayload),
+    ]);
+  }
+
+  /**
+   * Recipient-side: decline a requireConfirmation delivery. The object is
+   * removed locally and the sender is told so their delivery status
+   * reflects it, without ever executing/opening the content.
+   */
+  async rejectObject(objectId: string): Promise<void> {
+    const delivery = await this.cfg.db.deliveries
+      .where("objectId")
+      .equals(objectId)
+      .and((d) => d.destinationDeviceId === this.me && d.status === "pending")
+      .first();
+    if (!delivery) return;
+    await this.sendOps(delivery.sourceDeviceId, [
+      this.makeOp("REJECT_OBJECT", objectId, { objectId } satisfies ObjectRefPayload),
+    ]);
+    await this.deleteObjectLocal(objectId);
   }
 
   /** Local-only delete (MVP): removes the object and its delivery rows. */
   async deleteObjectLocal(objectId: string): Promise<void> {
-    await this.cfg.db.objects.delete(objectId);
     await this.cfg.db.deliveries.where("objectId").equals(objectId).delete();
+    await this.purgeObject(objectId);
+  }
+
+  /** Removes the object + its Yjs doc WITHOUT touching delivery rows —
+   *  used when a delivery's final status (expired, opened, ...) needs to
+   *  stay visible after the object content itself is gone. */
+  private async purgeObject(objectId: string): Promise<void> {
+    await this.cfg.db.objects.delete(objectId);
     await this.cfg.db.ydocs.delete(objectId);
     this.ydocs.get(objectId)?.destroy();
     this.ydocs.delete(objectId);
@@ -429,10 +501,16 @@ export class MeshEngine {
     };
   }
 
-  /** Seal ops into an envelope; send live or queue in the outbox. */
+  /**
+   * Seal ops into an envelope; send live or queue in the outbox.
+   * `hopLimit` bounds store-carry-forward fan-out for THIS bundle if it
+   * ends up queued (0 = never offered to a carrier — appropriate for
+   * acks/control ops, which are cheap to just re-send once back online).
+   */
   private async sendOps(
     recipientId: string,
     ops: Operation<unknown>[],
+    hopLimit = 0,
   ): Promise<boolean> {
     this.seq += 1;
     await this.cfg.db.settings.put({ key: "mySeq", value: this.seq });
@@ -451,12 +529,33 @@ export class MeshEngine {
       keyEpoch: this.currentEpoch,
     });
     const json = envelopeToJson(envelope);
+    const bytes = new TextEncoder().encode(JSON.stringify(json));
 
-    // Prefer a direct peer-to-peer channel; payloads then bypass the
-    // relay entirely. Falls back to the relay, then the outbox.
+    if (await this.deliverBytes(recipientId, bytes)) return true;
+
+    await this.cfg.db.outbox.add({
+      bundleId: envelope.messageId,
+      sourceDeviceId: this.me,
+      destinationDeviceId: recipientId,
+      workspaceId: this.cfg.workspaceId,
+      encryptedPayload: bytes,
+      createdAt: envelope.createdAt,
+      expiresAt: envelope.createdAt + OUTBOX_TTL_MS,
+      hopLimit,
+      signature: envelope.signature,
+      offeredTo: [],
+    });
+    return false;
+  }
+
+  /**
+   * Try a direct peer-to-peer channel first (payload then bypasses the
+   * relay entirely), then the relay. Returns false if neither is
+   * currently available — caller queues for later.
+   */
+  private async deliverBytes(recipientId: string, bytes: Uint8Array): Promise<boolean> {
     if (this.cfg.direct) {
       try {
-        const bytes = new TextEncoder().encode(JSON.stringify(json));
         if (this.cfg.direct.trySend(recipientId, bytes)) return true;
       } catch {
         // fall through to the relay
@@ -464,36 +563,141 @@ export class MeshEngine {
     }
     if (this.cfg.transport.isConnected) {
       try {
+        const json = JSON.parse(new TextDecoder().decode(bytes)) as EnvelopeJson;
         this.cfg.transport.sendEnvelope(json);
         return true;
       } catch {
-        // fall through to the outbox
+        // fall through — caller queues
       }
     }
-    await this.cfg.db.outbox.add({
-      bundleId: envelope.messageId,
-      sourceDeviceId: this.me,
-      destinationDeviceId: recipientId,
-      workspaceId: this.cfg.workspaceId,
-      encryptedPayload: new TextEncoder().encode(JSON.stringify(json)),
-      createdAt: envelope.createdAt,
-      expiresAt: envelope.createdAt + OUTBOX_TTL_MS,
-      hopLimit: 1,
-      signature: envelope.signature,
-    });
     return false;
   }
 
   private async drainOutbox(): Promise<void> {
     await this.cfg.db.outbox.where("expiresAt").below(this.now()).delete();
-    const bundles = await this.cfg.db.outbox.toArray();
-    for (const bundle of bundles) {
-      try {
-        await this.cfg.transport.send(bundle.encryptedPayload);
+    for (const bundle of await this.cfg.db.outbox.toArray()) {
+      if (await this.deliverBytes(bundle.destinationDeviceId, bundle.encryptedPayload)) {
         await this.cfg.db.outbox.delete(bundle.bundleId);
-      } catch {
-        return; // transport dropped again; keep the rest queued
       }
+    }
+  }
+
+  /**
+   * Store–carry–forward, part 1: for each bundle this device is CARRYING
+   * on behalf of someone else, forward it the moment the true destination
+   * looks reachable — same encrypted bytes, so the destination verifies
+   * and decrypts exactly as if it arrived directly from the sender.
+   */
+  private async attemptCarriedDelivery(): Promise<void> {
+    const now = this.now();
+    await this.cfg.db.carried.where("expiresAt").below(now).delete();
+    for (const bundle of await this.cfg.db.carried.toArray()) {
+      const dest = await this.cfg.db.devices.get(bundle.destinationDeviceId);
+      if (dest?.status !== "online") continue;
+      if (await this.forwardCarriedBytes(bundle.destinationDeviceId, bundle.encryptedPayload)) {
+        await this.cfg.db.carried.delete(bundle.bundleId);
+      }
+    }
+  }
+
+  /**
+   * Like deliverBytes, but for envelopes we're carrying on someone else's
+   * behalf: over the relay this MUST use forwardEnvelope (type "forward"),
+   * not sendEnvelope — the relay rejects "envelope" messages whose inner
+   * senderDeviceId doesn't match our own authenticated connection, which
+   * is exactly true here (we're relaying, not sending our own). A direct
+   * peer channel has no such restriction — it's just bytes to the peer.
+   */
+  private async forwardCarriedBytes(recipientId: string, bytes: Uint8Array): Promise<boolean> {
+    if (this.cfg.direct) {
+      try {
+        if (this.cfg.direct.trySend(recipientId, bytes)) return true;
+      } catch {
+        // fall through to the relay
+      }
+    }
+    if (this.cfg.transport.isConnected) {
+      try {
+        const json = JSON.parse(new TextDecoder().decode(bytes)) as EnvelopeJson;
+        this.cfg.transport.forwardEnvelope(json);
+        return true;
+      } catch {
+        // fall through — caller keeps the bundle queued
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Store–carry–forward, part 2: for our own OUTBOX bundles stuck behind
+   * an offline destination, hand a copy to one currently-online peer
+   * (never the destination itself) as a carrier — bounded by hopLimit so
+   * fan-out can't run away. We keep trying direct delivery ourselves too
+   * (drainOutbox); carrying is purely supplemental redundancy for when we
+   * go offline again before the destination ever reconnects to us.
+   */
+  private async offerCarrying(): Promise<void> {
+    const outboxBundles = await this.cfg.db.outbox.toArray();
+    if (outboxBundles.length === 0) return;
+    const onlinePeers = (await this.cfg.db.devices.toArray()).filter(
+      (d) => d.id !== this.me && d.status === "online",
+    );
+    if (onlinePeers.length === 0) return;
+
+    for (const bundle of outboxBundles) {
+      if (bundle.hopLimit <= 0) continue;
+      const offeredTo = bundle.offeredTo ?? [];
+      const carrier = onlinePeers.find(
+        (d) => d.id !== bundle.destinationDeviceId && !offeredTo.includes(d.id),
+      );
+      if (!carrier) continue;
+
+      const nextHopLimit = bundle.hopLimit - 1;
+      const sent = await this.sendOps(carrier.id, [
+        this.makeOp("CARRY_BUNDLE", undefined, {
+          bundleId: bundle.bundleId,
+          sourceDeviceId: bundle.sourceDeviceId,
+          destinationDeviceId: bundle.destinationDeviceId,
+          encryptedPayloadB64: toBase64(bundle.encryptedPayload),
+          createdAt: bundle.createdAt,
+          expiresAt: bundle.expiresAt,
+          hopLimit: nextHopLimit,
+        } satisfies CarryBundlePayload),
+      ]);
+      if (sent) {
+        await this.cfg.db.outbox.update(bundle.bundleId, {
+          hopLimit: nextHopLimit,
+          offeredTo: [...offeredTo, carrier.id],
+        });
+      }
+    }
+  }
+
+  /** Delete MeshObjects whose expiresAt has passed; mark their in-flight
+   *  deliveries "expired" (kept, not deleted, so Sent/inbox history still
+   *  shows the final status) rather than leaving them stuck as queued/sending. */
+  private async sweepExpiredObjects(): Promise<void> {
+    const now = this.now();
+    for (const object of await this.cfg.db.objects.where("expiresAt").below(now).toArray()) {
+      const deliveries = await this.cfg.db.deliveries.where("objectId").equals(object.id).toArray();
+      for (const delivery of deliveries) {
+        if (delivery.status !== "opened") {
+          await this.cfg.db.deliveries.update(delivery.id, { status: "expired" });
+        }
+      }
+      await this.purgeObject(object.id);
+    }
+  }
+
+  /** Runs on a timer (and once at startup / on presence change) to advance
+   *  expiry and store-carry-forward without needing a user action. */
+  private async periodicSweep(): Promise<void> {
+    try {
+      await this.sweepExpiredObjects();
+      await this.attemptCarriedDelivery();
+      await this.offerCarrying();
+    } catch (err) {
+      console.error("screenmesh: periodic sweep failed", err);
     }
   }
 
@@ -570,7 +774,7 @@ export class MeshEngine {
         break;
       }
       case "SEND_TO_DEVICE": {
-        const { objectId } = op.payload as SendToDevicePayload;
+        const { objectId, options } = op.payload as SendToDevicePayload;
         const existing = await this.cfg.db.deliveries
           .where("objectId")
           .equals(objectId)
@@ -579,22 +783,29 @@ export class MeshEngine {
               d.destinationDeviceId === this.me && d.sourceDeviceId === senderId,
           )
           .first();
+        // requireConfirmation gates the recipient behind an explicit
+        // accept/reject — the sender only learns "delivered" once the
+        // user acts (see acceptObject/rejectObject).
+        const gated = !!options?.requireConfirmation;
         if (!existing) {
           await this.cfg.db.deliveries.add({
             id: crypto.randomUUID(),
             objectId,
             sourceDeviceId: senderId,
             destinationDeviceId: this.me,
-            status: "delivered",
+            status: gated ? "pending" : "delivered",
             createdAt: now,
-            deliveredAt: now,
+            ...(gated ? {} : { deliveredAt: now }),
+            ...(options && Object.keys(options).length > 0 ? { options } : {}),
           });
         }
-        await this.sendOps(senderId, [
-          this.makeOp("MARK_DELIVERED", objectId, {
-            objectId,
-          } satisfies ObjectRefPayload),
-        ]);
+        if (!gated) {
+          await this.sendOps(senderId, [
+            this.makeOp("MARK_DELIVERED", objectId, {
+              objectId,
+            } satisfies ObjectRefPayload),
+          ]);
+        }
         break;
       }
       case "MARK_DELIVERED": {
@@ -634,6 +845,42 @@ export class MeshEngine {
       case "DELETE_OBJECT": {
         const { objectId } = op.payload as ObjectRefPayload;
         await this.cfg.db.objects.delete(objectId);
+        break;
+      }
+      case "REJECT_OBJECT": {
+        const { objectId } = op.payload as ObjectRefPayload;
+        const delivery = await this.cfg.db.deliveries
+          .where("objectId")
+          .equals(objectId)
+          .and(
+            (d) => d.sourceDeviceId === this.me && d.destinationDeviceId === senderId,
+          )
+          .first();
+        if (delivery) {
+          await this.cfg.db.deliveries.update(delivery.id, { status: "rejected" });
+        }
+        break;
+      }
+      case "CARRY_BUNDLE": {
+        const payload = op.payload as CarryBundlePayload;
+        if (payload.destinationDeviceId === this.me) break; // nothing to carry to ourselves
+        if (payload.expiresAt <= now) break;
+        if (await this.cfg.db.carried.get(payload.bundleId)) break; // already holding it
+        const bundle: DeliveryBundle = {
+          bundleId: payload.bundleId,
+          sourceDeviceId: payload.sourceDeviceId,
+          destinationDeviceId: payload.destinationDeviceId,
+          workspaceId: op.workspaceId,
+          encryptedPayload: fromBase64(payload.encryptedPayloadB64),
+          createdAt: payload.createdAt,
+          expiresAt: payload.expiresAt,
+          hopLimit: payload.hopLimit,
+          // The carrier can't independently verify the inner envelope's
+          // signature (it may not have that sender's key cached) — the
+          // true destination re-verifies it on arrival regardless.
+          signature: new Uint8Array(),
+        };
+        await this.cfg.db.carried.add(bundle);
         break;
       }
       case "REVOKE_DEVICE": {
@@ -684,6 +931,11 @@ export class MeshEngine {
     // The roster is authoritative: devices no longer in it were revoked.
     const ids = new Set(entries.map((entry) => entry.id));
     await this.cfg.db.devices.filter((d) => !ids.has(d.id)).delete();
+
+    // A device just went online — that's the moment carried bundles for
+    // it can be forwarded, and a moment a new carrier becomes available.
+    await this.attemptCarriedDelivery();
+    await this.offerCarrying();
   }
 
   private async keyFor(deviceId: string): Promise<CryptoKey> {

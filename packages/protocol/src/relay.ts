@@ -18,6 +18,18 @@ export type RelayClientMessage =
     }
   | { type: "envelope"; envelope: EnvelopeJson }
   | {
+      /**
+       * Store-carry-forward: relay this envelope on behalf of its ORIGINAL
+       * sender (a carrier, not the envelope's own senderDeviceId). Unlike
+       * "envelope", the relay does NOT require senderDeviceId to match the
+       * authenticated connection — the destination's own signature check
+       * on the inner envelope is what guarantees authenticity here, not
+       * the relay. See docs/Security.md.
+       */
+      type: "forward";
+      envelope: EnvelopeJson;
+    }
+  | {
       /** WebRTC signaling (offers/answers/ICE), forwarded verbatim. */
       type: "signal";
       to: string;

@@ -61,12 +61,14 @@ This layer decides *how* an encrypted operation reaches its destination:
 2. **Delivery queue.** Every outgoing object gets a `Delivery` record with a visible lifecycle:
 
    ```text
-   Created → Queued → Sending → Delivered → Opened → Acknowledged
+   Created → Queued → Sending → Delivered → Opened
+                          ↘ Pending → Opened / Rejected  (requireConfirmation)
                                         ↘ Expired / Failed
    ```
 
+   `Pending` is entered instead of `Delivered` when the sender set `requireConfirmation`: the object is visible to the recipient but every action is gated behind an explicit Accept/Reject (`MeshEngine.acceptObject` / `rejectObject`). `deleteAfterOpening` removes the recipient's local copy the instant `markOpened` runs.
 3. **Acknowledgements.** The recipient acknowledges receipt (and, separately, opening) so the sender can display accurate status.
-4. **Store–carry–forward.** The core differentiator. When the destination is unreachable, the encrypted `DeliveryBundle` stays in the outbox. Any trusted device the sender later syncs with may *carry* the bundle and hand it to the destination when they meet:
+4. **Store–carry–forward.** The core differentiator, implemented in `MeshEngine` (`packages/sync/src/engine.ts`). When the destination is unreachable, the encrypted `DeliveryBundle` stays in the sender's local outbox. On a timer (and whenever presence changes), the engine offers up to `hopLimit` distinct online peers a `CARRY_BUNDLE` operation carrying the bundle; each recipient stores it in its own `carried` table and forwards it — over WebRTC directly, or over the relay's dedicated `forward` path (see docs/Security.md) — the moment presence shows the true destination online:
 
    ```text
    Phone A → Laptop B: send note
@@ -75,7 +77,7 @@ This layer decides *how* an encrypted operation reaches its destination:
    Later Tablet C encounters Laptop B → Laptop B receives the note.
    ```
 
-   Tablet C cannot read the note; it only carries ciphertext. Bundles carry a `hopLimit` and `expiresAt` so they cannot circulate forever:
+   Only genuine object sends are carry-eligible (`DEFAULT_HOP_LIMIT`); acks and control operations use `hopLimit: 0` so they're never fanned out, keeping the mechanism scoped to real deliveries. Bundles carry a `hopLimit` and `expiresAt` so they cannot circulate forever:
 
    ```ts
    interface DeliveryBundle {
@@ -88,8 +90,11 @@ This layer decides *how* an encrypted operation reaches its destination:
      expiresAt: number;
      hopLimit: number;
      signature: Uint8Array;
+     offeredTo?: string[];
    }
    ```
+
+   The carrier is never *shown* the payload by the app — but see docs/Security.md §6 for the honest caveat that today's shared workspace key means a carrier isn't cryptographically barred from it either. Closing that gap is a Phase 5 item, not a redesign: it reuses the X25519 wrapping already built for key rotation, applied per-message instead of per-epoch.
 
 ### Layer 3 — Shared state
 

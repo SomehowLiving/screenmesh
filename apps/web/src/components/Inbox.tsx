@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import type {
   ChecklistContent,
+  Delivery,
   Device,
   FileContent,
   MeshObject,
@@ -28,6 +29,16 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatExpiry(expiresAt: number, now: number): string {
+  const ms = expiresAt - now;
+  if (ms <= 0) return "expiring…";
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1) return "expires in under a minute";
+  if (mins < 60) return `expires in ${mins}m`;
+  const hours = Math.round(mins / 60);
+  return hours < 24 ? `expires in ${hours}h` : `expires in ${Math.round(hours / 24)}d`;
 }
 
 function downloadFile(file: FileContent) {
@@ -157,6 +168,17 @@ export function InboxPanel(props: {
     ) ?? [];
   const devices = useLiveQuery(() => props.db.devices.toArray(), [props.db]) ?? [];
   const focus = useLiveQuery(() => props.db.settings.get("focusObject"), [props.db]);
+  // My incoming delivery record per object — drives the pending-confirmation gate.
+  const incoming =
+    useLiveQuery(
+      () =>
+        props.db.deliveries
+          .where("destinationDeviceId")
+          .equals(props.me.deviceId)
+          .toArray(),
+      [props.db, props.me.deviceId],
+    ) ?? [];
+  const deliveryByObjectId = new Map<string, Delivery>(incoming.map((d) => [d.objectId, d]));
 
   const nameOf = (id: string) =>
     id === props.me.deviceId
@@ -193,6 +215,8 @@ export function InboxPanel(props: {
       <ul className="plain">
         {objects.map((object) => {
           const mine = object.createdBy === props.me.deviceId;
+          const delivery = mine ? undefined : deliveryByObjectId.get(object.id);
+          const pending = delivery?.status === "pending";
           const file = isFileObject(object) ? (object.content as FileContent) : null;
           const isChecklist = object.type === "checklist";
           const text = file || isChecklist ? null : textOf(object.content);
@@ -210,6 +234,10 @@ export function InboxPanel(props: {
                   <span className="badge">{object.type}</span>{" "}
                   {mine ? "by me" : `from ${nameOf(object.createdBy)}`} ·{" "}
                   {new Date(object.updatedAt).toLocaleTimeString()}
+                  {object.expiresAt !== undefined && (
+                    <> · {formatExpiry(object.expiresAt, Date.now())}</>
+                  )}
+                  {pending && <> · awaiting your confirmation</>}
                 </div>
                 {object.type === "image" && file && (
                   <img
@@ -224,13 +252,13 @@ export function InboxPanel(props: {
                     {file.name} <span className="muted">({formatSize(file.size)})</span>
                   </p>
                 )}
-                {isChecklist && <Checklist object={object} engine={props.engine} />}
+                {isChecklist && !pending && <Checklist object={object} engine={props.engine} />}
                 {text !== null && !editing && (
                   <p className={`obj-text ${object.type === "code" ? "mono" : ""}`}>
                     {text}
                   </p>
                 )}
-                {editing && editable && (
+                {editing && editable && !pending && (
                   <TextEditor
                     object={object}
                     engine={props.engine}
@@ -240,79 +268,93 @@ export function InboxPanel(props: {
                     }}
                   />
                 )}
-                <div className="actions">
-                  {editable && !editing && (
+                {pending ? (
+                  <div className="actions">
+                    <button onClick={() => void props.engine.acceptObject(object.id)}>
+                      Accept
+                    </button>
                     <button
                       className="ghost"
-                      onClick={() => {
-                        setEditingId(object.id);
-                        void markOpenedIfReceived(object);
-                      }}
+                      onClick={() => void props.engine.rejectObject(object.id)}
                     >
-                      Edit
+                      Reject
                     </button>
-                  )}
-                  {file && (
-                    <button
-                      className="ghost"
-                      onClick={() => {
-                        downloadFile(file);
-                        void markOpenedIfReceived(object);
-                      }}
-                    >
-                      Download
-                    </button>
-                  )}
-                  {text !== null && (
-                    <button
-                      className="ghost"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(text);
-                        await markOpenedIfReceived(object);
-                      }}
-                    >
-                      Copy
-                    </button>
-                  )}
-                  {object.type === "link" && text !== null && (
-                    <button
-                      className="ghost"
-                      onClick={() => {
-                        window.open(text, "_blank", "noopener");
-                        void markOpenedIfReceived(object);
-                      }}
-                    >
-                      Open
-                    </button>
-                  )}
-                  {others.length > 0 && (
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          void props.engine.continueOnDevice(object.id, e.target.value);
-                        }
-                        e.target.value = "";
-                      }}
-                    >
-                      <option value="" disabled>
-                        Continue on…
-                      </option>
-                      {others.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.name}
-                          {device.status === "offline" ? " (offline)" : ""}
+                  </div>
+                ) : (
+                  <div className="actions">
+                    {editable && !editing && (
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          setEditingId(object.id);
+                          void markOpenedIfReceived(object);
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {file && (
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          downloadFile(file);
+                          void markOpenedIfReceived(object);
+                        }}
+                      >
+                        Download
+                      </button>
+                    )}
+                    {text !== null && (
+                      <button
+                        className="ghost"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(text);
+                          await markOpenedIfReceived(object);
+                        }}
+                      >
+                        Copy
+                      </button>
+                    )}
+                    {object.type === "link" && text !== null && (
+                      <button
+                        className="ghost"
+                        onClick={() => {
+                          window.open(text, "_blank", "noopener");
+                          void markOpenedIfReceived(object);
+                        }}
+                      >
+                        Open
+                      </button>
+                    )}
+                    {others.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            void props.engine.continueOnDevice(object.id, e.target.value);
+                          }
+                          e.target.value = "";
+                        }}
+                      >
+                        <option value="" disabled>
+                          Continue on…
                         </option>
-                      ))}
-                    </select>
-                  )}
-                  <button
-                    className="ghost"
-                    onClick={() => void props.engine.deleteObjectLocal(object.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+                        {others.map((device) => (
+                          <option key={device.id} value={device.id}>
+                            {device.name}
+                            {device.status === "offline" ? " (offline)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <button
+                      className="ghost"
+                      onClick={() => void props.engine.deleteObjectLocal(object.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
               </div>
             </li>
           );

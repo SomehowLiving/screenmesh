@@ -70,7 +70,9 @@ Encryption happens **before** the envelope reaches any transport:
 plaintext → encrypt on sender → WebRTC / relay / nearby / QR → decrypt on recipient
 ```
 
-A relay server, or a trusted device carrying a store–carry–forward bundle, only ever handles ciphertext. It cannot read notes, files, clipboard data, commands, or attachments.
+A relay server, or a trusted device carrying a store–carry–forward bundle, only ever *routes* ciphertext — it never decrypts it to do so. See §6 for the honest caveat on what a carrier could technically do with today's shared-workspace-key model, versus what the app's routing exposes.
+
+**Carrier forwarding and the relay's sender check.** Normally the relay rejects any envelope whose `senderDeviceId` doesn't match the authenticated connection sending it — a device can't claim to speak for another device over the wire. Store–carry–forward is the deliberate exception: a carrier relays a bundle it did not create, so it uses a distinct `forward` relay message that skips that check. This is safe because the relay was never the thing authenticating the envelope's origin — the **destination's own signature verification** on the inner envelope is, and a carrier cannot forge that signature. The relay's sender check is a defense-in-depth convenience for the common case, not a substitute for it.
 
 ## 4. Replay protection
 
@@ -98,8 +100,8 @@ Payload encryption does not hide **metadata**. Depending on mode, an observer or
 | Mode | Who sees what |
 |---|---|
 | Direct (WebRTC) | Peers see each other's network information (IPs). Low latency, no server payload handling — but P2P ≠ anonymous. |
-| Relayed | Server sees device identifiers, message sizes, delivery times, source IPs, destination workspace — never payloads. |
-| Store–carry–forward | Carrier devices see bundle metadata (source, destination, size, expiry) — never payloads. |
+| Relayed | Server sees device identifiers, message sizes, delivery times, source IPs, destination workspace — never payloads (it never has the workspace key). |
+| Store–carry–forward | Carrier devices see bundle metadata (source, destination, size, expiry) through the app, and are never shown the payload — **but today's shared symmetric workspace key means a carrier could, in principle, decrypt a bundle it's holding if it inspected the raw bytes directly**, since it holds the same key as every other workspace member. This is a real gap relative to FUTURE.md's "the carrier cannot read it," not a hidden one: closing it needs per-recipient envelope keys (wrapping a per-message key via X25519 for each recipient, the same primitive already used for key rotation — see §5) rather than one workspace-wide key. Tracked for Phase 5. |
 
 ## 7. What ScreenMesh is not
 

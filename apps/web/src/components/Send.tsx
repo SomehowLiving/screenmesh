@@ -1,12 +1,24 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { toBase64, type FileContent, type MeshObjectType } from "@screenmesh/protocol";
+import {
+  toBase64,
+  type FileContent,
+  type MeshObjectType,
+  type SendOptions,
+} from "@screenmesh/protocol";
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
 
 /** Envelopes travel as JSON over the relay — keep attachments small. */
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+const EXPIRY_CHOICES: Array<{ label: string; ms?: number }> = [
+  { label: "Never expires" },
+  { label: "Expires in 10 minutes", ms: 10 * 60 * 1000 },
+  { label: "Expires in 1 hour", ms: 60 * 60 * 1000 },
+  { label: "Expires in 24 hours", ms: 24 * 60 * 60 * 1000 },
+];
 
 function detectType(text: string): MeshObjectType {
   return /^https?:\/\/\S+$/i.test(text.trim()) ? "link" : "text";
@@ -27,6 +39,9 @@ export function SendPanel(props: {
   const [type, setType] = useState<MeshObjectType | "auto">("auto");
   const [file, setFile] = useState<FileContent | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expiryIndex, setExpiryIndex] = useState(0);
+  const [deleteAfterOpening, setDeleteAfterOpening] = useState(false);
+  const [requireConfirmation, setRequireConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -67,6 +82,15 @@ export function SendPanel(props: {
     setNote(null);
   }
 
+  function currentOptions(): SendOptions {
+    const ms = EXPIRY_CHOICES[expiryIndex]?.ms;
+    return {
+      ...(ms !== undefined ? { expiresAt: Date.now() + ms } : {}),
+      ...(deleteAfterOpening ? { deleteAfterOpening: true } : {}),
+      ...(requireConfirmation ? { requireConfirmation: true } : {}),
+    };
+  }
+
   async function send() {
     const content = text.trim();
     if ((!content && !file) || recipients.length === 0) return;
@@ -74,6 +98,7 @@ export function SendPanel(props: {
     setNote(null);
     try {
       const recipientIds = recipients.map((d) => d.id);
+      const options = currentOptions();
       if (file) {
         await props.engine.sendObject(
           {
@@ -81,6 +106,7 @@ export function SendPanel(props: {
             content: file,
           },
           recipientIds,
+          options,
         );
         setFile(null);
       }
@@ -95,11 +121,13 @@ export function SendPanel(props: {
           await props.engine.sendObject(
             { type: "checklist", content: { items } },
             recipientIds,
+            options,
           );
         } else {
           await props.engine.sendObject(
             { type: objectType, content: { text: content } },
             recipientIds,
+            options,
           );
         }
         setText("");
@@ -181,6 +209,29 @@ export function SendPanel(props: {
           ))}
         </div>
       )}
+      <select value={expiryIndex} onChange={(e) => setExpiryIndex(Number(e.target.value))}>
+        {EXPIRY_CHOICES.map((choice, i) => (
+          <option key={choice.label} value={i}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={deleteAfterOpening}
+          onChange={(e) => setDeleteAfterOpening(e.target.checked)}
+        />
+        Delete after opening
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={requireConfirmation}
+          onChange={(e) => setRequireConfirmation(e.target.checked)}
+        />
+        Require confirmation before delivery counts as accepted
+      </label>
       <button
         disabled={busy || (!text.trim() && !file) || recipients.length === 0}
         onClick={() => void send()}

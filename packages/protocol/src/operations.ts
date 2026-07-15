@@ -17,7 +17,9 @@ export type OperationType =
   | "REVOKE_DEVICE"
   | "ROTATE_KEY"
   | "YJS_UPDATE"
-  | "CONTINUE_ON_DEVICE";
+  | "CONTINUE_ON_DEVICE"
+  | "CARRY_BUNDLE"
+  | "REJECT_OBJECT";
 
 export interface Operation<TPayload = unknown> {
   operationId: string;
@@ -77,4 +79,23 @@ export interface UpdateObjectPayload {
 /** Ask the target device to open this object for editing. */
 export interface ContinueOnDevicePayload {
   objectId: string;
+}
+
+/**
+ * Store–carry–forward (docs/Architecture.md §2): hand an opaque, already
+ * end-to-end-encrypted envelope to a peer for safekeeping, addressed to a
+ * third device the sender can't currently reach. The carrier cannot
+ * decrypt the INNER envelope's payload any more than the relay can — see
+ * docs/Security.md for the honest caveat on today's shared-workspace-key
+ * model. `encryptedPayloadB64` is the base64 JSON of an EnvelopeJson.
+ */
+export interface CarryBundlePayload {
+  bundleId: string;
+  sourceDeviceId: string;
+  destinationDeviceId: string;
+  encryptedPayloadB64: string;
+  createdAt: number;
+  expiresAt: number;
+  /** Remaining number of DISTINCT carriers this bundle may still be handed to. */
+  hopLimit: number;
 }

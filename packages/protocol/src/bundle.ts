@@ -14,6 +14,8 @@ export interface DeliveryBundle {
   /** Remaining device-to-device hops before the bundle is dropped. */
   hopLimit: number;
   signature: Uint8Array;
+  /** Devices already offered this bundle as a carrier (avoids re-offering). */
+  offeredTo?: string[];
 }
 
 export const DEFAULT_HOP_LIMIT = 4;

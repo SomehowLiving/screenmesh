@@ -41,12 +41,14 @@ The core interaction to validate:
 - [x] Replay protection: message-ID dedupe, sequence numbers, envelope expiry
 - [x] Workspace key rotation on revocation: new key wrapped per-device via X25519 ECDH, epoch-tagged envelopes; revoked devices cannot unwrap post-rotation traffic
 
-## Phase 2 — Eventual delivery
+## Phase 2 — Eventual delivery ✅
 
-- Store–carry–forward: encrypted `DeliveryBundle`s carried by trusted intermediary devices (hop limits, expiry)
-- Relay-side store-and-forward for offline recipients
-- Expiring objects (after N minutes / after opening / with workspace)
-- Delivery options: *deliver when device returns*, *delete after opening*, *require confirmation*
+- [x] Expiring objects: optional TTL per send, enforced by a periodic sweep on every device — deletes the object locally and marks any still-in-flight delivery `expired` (history stays visible; only `opened` deliveries are left alone)
+- [x] Delivery options: `deleteAfterOpening` (recipient's copy vanishes right after `markOpened`); `requireConfirmation` (delivery sits as `pending` — content is visible but actions are gated — until the recipient explicitly Accepts or Rejects; rejecting notifies the sender and never executes/opens anything)
+- [x] Store–carry–forward: encrypted `DeliveryBundle`s (already defined in the protocol, previously unused) now actually get carried. A real object send is carry-eligible (`DEFAULT_HOP_LIMIT`); acks/control ops are not (`hopLimit: 0`), so only genuine object deliveries fan out to carriers. A `CARRY_BUNDLE` operation hands the bundle — still sealed for the true destination — to an online peer, which holds it in a `carried` table and forwards it the moment presence shows the destination online, via a dedicated relay `forward` path (see Security.md — the relay's normal sender-identity check doesn't apply to carriers, since the destination's own signature check is what authenticates the bundle, not the relay)
+- [x] Relay-side store-and-forward for offline recipients (shipped in Phase 1; still the primary path — carry is supplemental redundancy for when the *original sender* goes away before the destination reconnects)
+
+Known limitation, tracked for Phase 5: today all workspace devices share one symmetric key, so a carrier *could* technically decrypt what it's holding if it inspected the bytes — the app never exposes that, but the cryptographic guarantee FUTURE.md describes ("the carrier cannot read it") isn't yet enforced end-to-end. Per-recipient envelope keys (the same X25519 wrapping already built for key rotation, applied per-message instead of per-epoch) would close this gap.
 
 ## Phase 3 — Native nearby
 

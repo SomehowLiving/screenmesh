@@ -65,7 +65,11 @@ export type DeliveryStatus =
   | "queued"
   | "sending"
   | "delivered"
+  /** Delivered but awaiting the recipient's explicit accept (requireConfirmation). */
+  | "pending"
   | "opened"
+  /** Recipient explicitly declined a requireConfirmation delivery. */
+  | "rejected"
   | "expired"
   | "failed";
 
@@ -78,6 +82,9 @@ export interface Delivery {
   createdAt: number;
   deliveredAt?: number;
   openedAt?: number;
+  /** The SendOptions this delivery was created with, kept for enforcement
+   *  (deleteAfterOpening, requireConfirmation) and UI display. */
+  options?: SendOptions;
 }
 
 /** Content shape for "text" | "link" | "code" objects. */
