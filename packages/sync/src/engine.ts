@@ -100,6 +100,14 @@ export interface EngineConfig {
   now?: () => number;
   /** Override the periodic sweep cadence (tests use a short interval). */
   sweepIntervalMs?: number;
+  /**
+   * Fires whenever a NEW object (not a duplicate/already-known one)
+   * arrives from another device — whole objects via CREATE_OBJECT, large
+   * files once chunk reassembly completes. The web UI doesn't need this
+   * (Dexie liveQuery already reacts to the objects table), but non-UI
+   * consumers with no reactive store — the Node desktop agent — do.
+   */
+  onObjectReceived?: (object: MeshObject, senderId: string) => void;
 }
 
 /**
@@ -834,20 +842,42 @@ export class MeshEngine {
     const { ops } = JSON.parse(new TextDecoder().decode(plaintext)) as {
       ops: Operation<unknown>[];
     };
+    const newObjects: MeshObject[] = [];
     for (const op of ops) {
-      await this.applyOp(envelope.senderDeviceId, op);
+      const object = await this.applyOp(envelope.senderDeviceId, op);
+      if (object) newObjects.push(object);
+    }
+    // Fired only after every op in the envelope is applied — a
+    // CREATE_OBJECT's sibling SEND_TO_DEVICE (same envelope) has already
+    // created the delivery record by now, so a consumer calling
+    // markOpened() from this callback finds it. See applyOp's doc comment.
+    for (const object of newObjects) {
+      this.cfg.onObjectReceived?.(object, envelope.senderDeviceId);
     }
   }
 
-  private async applyOp(senderId: string, op: Operation<unknown>): Promise<void> {
+  /**
+   * Returns a newly-received object (if this op created one) so
+   * handleIncoming can fire onObjectReceived AFTER every op in the
+   * envelope has been applied — not per-op. A CREATE_OBJECT and its
+   * sibling SEND_TO_DEVICE always travel in the SAME envelope (see
+   * sendObject), so firing the callback mid-envelope would let a
+   * non-reactive consumer's markOpened() run before the delivery record
+   * SEND_TO_DEVICE creates even exists.
+   */
+  private async applyOp(senderId: string, op: Operation<unknown>): Promise<MeshObject | null> {
     await this.cfg.db.operations.put(op);
     const now = this.now();
+    let newObject: MeshObject | null = null;
 
     switch (op.type) {
       case "CREATE_OBJECT": {
         const { object } = op.payload as CreateObjectPayload;
         const existing = await this.cfg.db.objects.get(object.id);
-        if (!existing) await this.cfg.db.objects.put(object);
+        if (!existing) {
+          await this.cfg.db.objects.put(object);
+          newObject = object;
+        }
         break;
       }
       case "UPDATE_OBJECT": {
@@ -919,7 +949,10 @@ export class MeshEngine {
             ...(meta.expiresAt !== undefined ? { expiresAt: meta.expiresAt } : {}),
           };
           const existingObject = await this.cfg.db.objects.get(object.id);
-          if (!existingObject) await this.cfg.db.objects.put(object);
+          if (!existingObject) {
+            await this.cfg.db.objects.put(object);
+            newObject = object;
+          }
           this.incomingChunks.delete(payload.fileId);
           await this.recordIncomingDelivery(senderId, object.id, meta.options, now);
         }
@@ -1012,6 +1045,7 @@ export class MeshEngine {
       default:
         break;
     }
+    return newObject;
   }
 
   private async applyPresence(entries: PresenceEntry[]): Promise<void> {

@@ -63,14 +63,16 @@ Known limitation at the time, resolved in Phase 5: this shipped when all workspa
 - Ultrasonic discovery chirps
 - Apple Multipeer / Network.framework adapter
 
-## Phase 5 — Toward the device bus (in progress)
+## Phase 5 — Toward the device bus ✅
 
 - [x] **Forward-secret per-pair Double Ratchet sessions** (Security.md §5): replaces the shared workspace-key/epoch model entirely. Each device pair bootstraps a session from the QR-transported pairing secret + X25519 identity keys, then ratchets forward with fresh ephemeral keys on every round trip — a past-state compromise doesn't expose future messages, and revocation no longer needs a group-wide rekey since sessions are pairwise. Bounded out-of-order tolerance via a capped skipped-key cache
 - [x] **Temporary clipboard tunnel**: one-click "share clipboard for N minutes," built entirely on Phase 2's expiring-objects + delete-after-opening machinery — no new delivery mechanism needed
 - [x] **Secure file drop**: files above ~150 KB travel as a sequence of small `FILE_CHUNK` envelopes (each independently carry-eligible) instead of one giant envelope; the recipient reassembles and materializes the object only once every chunk has arrived
 - [x] **Capability routing**: devices advertise capabilities (camera, terminal, filesystem, local models, ...) via presence; a send can target "whichever device has X" (`MeshEngine.resolveCapability`, ranked online-first) instead of naming a specific device. Self-reported and unverified — a routing convenience among already-paired, already-trusted devices, not a privilege boundary (Security.md §6)
-- [ ] Trusted desktop agent with approval-gated command execution — needs a separate local process; a browser tab can't spawn a shell
-- [ ] Agent-to-agent structured task channel
+- [x] **Trusted desktop agent** (`apps/agent`): a standalone Node CLI reusing the exact same crypto/sync/transport packages as the PWA — same ratchet sessions, same relay, same store-carry-forward. Persists device identity to a local JSON file (extractable keys + PKCS8 export, since there's no IndexedDB to lean on — Security.md §1) and resumes without re-pairing. Executes `command` objects only behind an interactive terminal approval prompt; never automatic
+- [x] **Agent-to-agent structured task channel**: a distinct `agent_task` object type (`{action, params}`) carries structured requests to a small handler registry (`echo`, `read_file`, `run_command`) rather than an open plugin system, still behind the same approval gate, replying with an ordinary `text` object
+
+`packages/sync/src/engine.ts` gained one general-purpose primitive along the way: `onObjectReceived`, a callback fired once every op in an incoming envelope has been applied (not mid-envelope) — needed because the Node agent has no Dexie liveQuery to react to new objects the way the web UI does.
 
 ## Explicitly not in the first version
 

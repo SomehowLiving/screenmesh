@@ -1,8 +1,9 @@
 /**
- * Payload encryption: AES-GCM with per-message nonces, keys derived per
- * workspace/session. Rotating workspace keys implement both forward
- * secrecy (coarse-grained, MVP level) and revocation — a revoked device
- * never receives the next key. See docs/Security.md §5.
+ * AES-GCM primitives with per-message nonces. `generateWorkspaceKey`'s
+ * output now serves as the pairing secret that seeds every pairwise
+ * Double Ratchet session (packages/crypto/src/ratchet.ts) — actual
+ * message keys are ratchet-derived per docs/Security.md §5, not this key
+ * directly.
  */
 
 import { fromBase64, toBase64 } from "@screenmesh/protocol";
@@ -56,6 +57,3 @@ export async function decrypt(
   );
   return new Uint8Array(plaintext);
 }
-
-// TODO(phase-5): replace coarse key rotation with a reviewed ratcheting
-// protocol (Noise / Double Ratchet / MLS) for real forward secrecy.

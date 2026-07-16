@@ -19,12 +19,23 @@ export interface DeviceIdentity {
   encryptionPrivateKey: CryptoKey;
 }
 
-export async function generateIdentity(): Promise<DeviceIdentity> {
-  const signing = (await crypto.subtle.generateKey("Ed25519", false, [
+/**
+ * Non-extractable by default (the browser case): even a compromised page
+ * can use the key but never read the raw bytes out. Node contexts that
+ * need to persist identity to disk (no IndexedDB structured-clone to
+ * lean on — see the desktop agent, packages/agent) pass
+ * `{ extractable: true }` and use serializeIdentity/deserializeIdentity
+ * below.
+ */
+export async function generateIdentity(options?: {
+  extractable?: boolean;
+}): Promise<DeviceIdentity> {
+  const extractable = options?.extractable ?? false;
+  const signing = (await crypto.subtle.generateKey("Ed25519", extractable, [
     "sign",
     "verify",
   ])) as CryptoKeyPair;
-  const agreement = (await crypto.subtle.generateKey("X25519", false, [
+  const agreement = (await crypto.subtle.generateKey("X25519", extractable, [
     "deriveBits",
   ])) as CryptoKeyPair;
   return {
@@ -44,6 +55,18 @@ export async function exportPublicKey(key: CryptoKey): Promise<string> {
 export async function importPublicKey(base64: string): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", fromBase64(base64) as BufferSource, "Ed25519", true, [
     "verify",
+  ]);
+}
+
+/** Requires an EXTRACTABLE private key — see generateIdentity's doc comment. */
+export async function exportEd25519PrivateKey(key: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey("pkcs8", key);
+  return toBase64(new Uint8Array(raw));
+}
+
+export async function importEd25519PrivateKey(base64: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey("pkcs8", fromBase64(base64) as BufferSource, "Ed25519", true, [
+    "sign",
   ]);
 }
 

@@ -23,6 +23,8 @@ public key  → shared during pairing
 
 All via the Web Crypto API. Browser support for the exact primitives varies, so `@screenmesh/crypto` isolates them behind a small interface — if a reviewed cross-platform library (libsodium.js) proves more reliable, it swaps in without touching callers.
 
+**Browser keys are non-extractable** (`generateIdentity()`'s default): even a compromised page can use the key but never read the raw bytes out, relying on IndexedDB's structured-clone to persist the opaque `CryptoKey` object across reloads. The desktop agent (`apps/agent`) has no IndexedDB and needs to write identity to a plain JSON file to survive restarts, so it opts into `generateIdentity({ extractable: true })` and exports the private keys (PKCS8) via `serializeIdentity`/`deserializeIdentity` (`packages/crypto/src/persist.ts`). That file is the one piece of ScreenMesh state that's genuinely equivalent to a private key on disk — the agent writes it with restrictive permissions (`0o600`) as a best effort, but treat it like any other SSH-key-grade secret: protect the disk it's on, don't reuse across untrusted machines.
+
 ## 2. Pairing
 
 Pairing is the explicit trust ceremony. The QR code (or short pairing code / shared link) contains:
@@ -142,14 +144,24 @@ ScreenMesh should not claim to be:
 
 ## 8. Command safety
 
-Command objects (`pnpm run dev` sent phone → laptop) are **never executed automatically** in the MVP — they arrive as cards with *Copy / Open terminal / Save to history* actions only. A future trusted desktop agent may support controlled execution, always behind an explicit per-command approval prompt on the receiving device:
+Command objects (`pnpm run dev` sent phone → laptop) are **never executed automatically** in the web app — they arrive as cards with a *Copy* action only. A browser tab has no way to spawn a process, which is architecturally what keeps this safe there.
+
+The desktop agent (`apps/agent`, docs/Roadmap.md Phase 5) *can* execute — it's a real local process — but only ever behind an explicit terminal prompt, for both object types that can trigger execution:
 
 ```text
-Incoming command from Nidhi's Phone
+Incoming command from Nidhi's Phone:
 
-pnpm run integration-test
+  pnpm run integration-test
 
-[Reject] [Copy] [Run]
+[R]un it, anything else rejects:
 ```
 
-Replay protection (section 4) is a hard prerequisite for that feature.
+```text
+Incoming agent task from Nidhi's Laptop: run_command({"command":"pnpm test"})
+
+[R]un it, anything else rejects:
+```
+
+There is no "auto-approve" flag, no allowlist of pre-trusted commands, and no unattended mode — every single invocation blocks on that prompt (`apps/agent/src/handleObject.ts`). A rejected request tells the sender it was declined rather than silently vanishing, and never runs anything. Replay protection (section 4) is a hard prerequisite for this: the per-pair ratchet + `seen` message-ID dedup mean a captured command object can't be replayed to trigger a second, unapproved execution.
+
+`agent_task` objects go through the identical gate, resolved against a small built-in handler registry (`echo`, `read_file`, `run_command`) rather than an open-ended plugin system — deliberately narrow, since every handler here touches something sensitive (shell, filesystem).

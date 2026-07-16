@@ -15,6 +15,37 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  apps/agent:
+    dependencies:
+      '@screenmesh/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@screenmesh/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@screenmesh/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@screenmesh/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
+      '@screenmesh/transport':
+        specifier: workspace:*
+        version: link:../../packages/transport
+      fake-indexeddb:
+        specifier: ^6.0.0
+        version: 6.2.5
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   apps/server:
     dependencies:
       '@fastify/cors':

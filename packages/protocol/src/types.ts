@@ -67,7 +67,8 @@ export type MeshObjectType =
   | "file"
   | "checklist"
   | "clipboard"
-  | "command";
+  | "command"
+  | "agent_task";
 
 export interface MeshObject {
   id: string;
@@ -128,6 +129,19 @@ export interface ChecklistItem {
 /** Content shape for "checklist" objects. */
 export interface ChecklistContent {
   items: ChecklistItem[];
+}
+
+/**
+ * Content shape for "agent_task" objects — a structured request routed to
+ * a local agent (docs/Roadmap.md Phase 5), as opposed to "command" (a raw
+ * shell string a human copies) or free text. The agent looks up `action`
+ * in its handler registry; results come back as an ordinary "text" object
+ * addressed to the task's sender. Never auto-executed without approval
+ * (docs/Security.md §8) — same rule as command objects.
+ */
+export interface AgentTaskContent {
+  action: string;
+  params?: Record<string, unknown>;
 }
 
 /** Options attached to a send action ("expire after 1 hour", etc.). */

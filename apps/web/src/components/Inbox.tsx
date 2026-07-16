@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import type {
+  AgentTaskContent,
   ChecklistContent,
   Delivery,
   Device,
@@ -16,6 +17,13 @@ const EDITABLE_TYPES = new Set(["text", "code", "link"]);
 
 function isFileObject(object: MeshObject): boolean {
   return object.type === "image" || object.type === "file";
+}
+
+function formatAgentTask(content: AgentTaskContent): string {
+  const params = content.params && Object.keys(content.params).length > 0
+    ? JSON.stringify(content.params)
+    : "";
+  return `${content.action}(${params})`;
 }
 
 function textOf(content: unknown): string {
@@ -219,7 +227,9 @@ export function InboxPanel(props: {
           const pending = delivery?.status === "pending";
           const file = isFileObject(object) ? (object.content as FileContent) : null;
           const isChecklist = object.type === "checklist";
-          const text = file || isChecklist ? null : textOf(object.content);
+          const isAgentTask = object.type === "agent_task";
+          const text =
+            file || isChecklist || isAgentTask ? null : textOf(object.content);
           const editable = EDITABLE_TYPES.has(object.type);
           const editing = editingId === object.id;
           return (
@@ -253,6 +263,11 @@ export function InboxPanel(props: {
                   </p>
                 )}
                 {isChecklist && !pending && <Checklist object={object} engine={props.engine} />}
+                {isAgentTask && (
+                  <p className="obj-text mono">
+                    {formatAgentTask(object.content as AgentTaskContent)}
+                  </p>
+                )}
                 {text !== null && !editing && (
                   <p className={`obj-text ${object.type === "code" ? "mono" : ""}`}>
                     {text}

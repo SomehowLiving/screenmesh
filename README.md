@@ -79,16 +79,17 @@ Send a command from documentation on your phone straight to your laptop. Throw a
 ScreenMesh/
 ├── apps/
 │   ├── web/            # PWA — React + TypeScript + Vite, service worker, IndexedDB
-│   └── server/         # Fastify relay — WebSocket signaling + encrypted store-and-forward
+│   ├── server/         # Fastify relay — WebSocket signaling + encrypted store-and-forward
+│   └── agent/          # Desktop agent CLI — approval-gated command/agent-task execution
 ├── packages/
 │   ├── protocol/       # Shared types: objects, envelopes, operations, delivery bundles
-│   ├── crypto/         # Device identity, pairing, payload encryption (Web Crypto)
+│   ├── crypto/         # Device identity, pairing, Double Ratchet, payload encryption
 │   ├── transport/      # MeshTransport interface + WebRTC / WebSocket / QR adapters
 │   ├── sync/           # Operation log, CRDT integration, delivery & routing, outbox
 │   └── storage/        # Dexie/IndexedDB persistence layer
 ├── docs/
 │   ├── Architecture.md # Layered architecture, data flow, sync & delivery design
-│   ├── Security.md     # Identity, pairing, E2EE, replay protection, threat model
+│   ├── Security.md     # Identity, pairing, E2EE, Double Ratchet, threat model
 │   ├── Transports.md   # Transport adapters, negotiation, future transports
 │   └── Roadmap.md      # MVP scope, phases, explicit non-goals
 ├── IDEA.md             # Original product concept
@@ -117,6 +118,20 @@ pnpm smoke
 ```
 
 The dev server listens on all interfaces over **HTTPS** (self-signed — Web Crypto requires a secure context) and proxies the relay same-origin under `/api`, so one URL serves the page, the pairing API, and the WebSocket.
+
+### Desktop agent (command execution)
+
+A browser tab can't spawn a shell, so approval-gated command execution runs as a separate local process, reusing the exact same crypto/sync/transport packages as the PWA:
+
+```bash
+# Pair it — grab a "Copy join link" from the web app's pairing panel first
+pnpm --filter @screenmesh/agent dev -- --join "<join-link>" --name "My Desktop"
+
+# Later runs resume the saved session automatically
+pnpm --filter @screenmesh/agent dev
+```
+
+It advertises the `terminal` capability, so the web app's Send panel can route straight to it ("Route to device with this capability"). Send it a `command` or `agent_task` object and it will print what's being asked and wait for your `[R]un` before executing anything — see [docs/Security.md](docs/Security.md#8-command-safety).
 
 **Pairing a phone:** start both dev servers, open `https://localhost:5173` on the laptop, and create a workspace. The QR/join link automatically points at your machine's **LAN IP** (the server reports it via `/api/info`) — scan it with the phone's camera. The phone shows a certificate warning once (self-signed dev cert): tap *Advanced → Proceed*, name the device, and it joins. Both devices must be on the same Wi-Fi, and Windows Firewall must allow Node on ports 5173/8787 (allow the prompt on first run).
 

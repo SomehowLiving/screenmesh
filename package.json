@@ -11,10 +11,11 @@
   "scripts": {
     "dev:web": "pnpm --filter @screenmesh/web dev",
     "dev:server": "pnpm --filter @screenmesh/server dev",
+    "dev:agent": "pnpm --filter @screenmesh/agent dev --",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "smoke": "tsx packages/sync/scripts/smoke.ts && tsx packages/sync/scripts/engine-smoke.ts"
+    "smoke": "tsx packages/crypto/scripts/ratchet-test.ts && tsx packages/sync/scripts/smoke.ts && tsx packages/sync/scripts/engine-smoke.ts && tsx apps/agent/scripts/agent-smoke.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

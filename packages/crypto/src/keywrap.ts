@@ -21,6 +21,18 @@ export async function importEncryptionPublicKey(b64: string): Promise<CryptoKey>
   return crypto.subtle.importKey("raw", fromBase64(b64) as BufferSource, "X25519", true, []);
 }
 
+/** Requires an EXTRACTABLE private key — see identity.ts's generateIdentity doc comment. */
+export async function exportEncryptionPrivateKey(key: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey("pkcs8", key);
+  return toBase64(new Uint8Array(raw));
+}
+
+export async function importEncryptionPrivateKey(b64: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey("pkcs8", fromBase64(b64) as BufferSource, "X25519", true, [
+    "deriveBits",
+  ]);
+}
+
 /** Raw bytes of the pairing secret — fed into ratchet session bootstrap. */
 export async function exportRawWorkspaceKey(key: CryptoKey): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.exportKey("raw", key));

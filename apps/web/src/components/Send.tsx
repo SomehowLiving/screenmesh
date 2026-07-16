@@ -71,6 +71,8 @@ export function SendPanel(props: {
   const [note, setNote] = useState<string | null>(null);
   const [clipboardDuration, setClipboardDuration] = useState(1); // "5 minutes"
   const [capability, setCapability] = useState<DeviceCapability>(CAPABILITY_CHOICES[0]!);
+  const [taskAction, setTaskAction] = useState("echo");
+  const [taskParams, setTaskParams] = useState("{}");
 
   const others =
     useLiveQuery(
@@ -162,7 +164,36 @@ export function SendPanel(props: {
     }
   }
 
+  async function sendAgentTask() {
+    if (recipients.length === 0) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      let params: Record<string, unknown> | undefined;
+      if (taskParams.trim()) {
+        const parsed: unknown = JSON.parse(taskParams);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("params must be a JSON object, e.g. {\"path\": \"/tmp/log\"}");
+        }
+        params = parsed as Record<string, unknown>;
+      }
+      await props.engine.sendObject(
+        { type: "agent_task", content: { action: taskAction.trim(), ...(params ? { params } : {}) } },
+        recipients.map((d) => d.id),
+        currentOptions(),
+      );
+      setNote(
+        `Task "${taskAction}" sent to ${recipients.map((d) => d.name).join(", ")} — a desktop agent there will ask for approval before running it.`,
+      );
+    } catch (err) {
+      setNote(`Could not send task: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send() {
+    if (type === "agent_task") return sendAgentTask();
     const content = text.trim();
     if ((!content && !file) || recipients.length === 0) return;
     setBusy(true);
@@ -216,21 +247,45 @@ export function SendPanel(props: {
   return (
     <section className="card stack">
       <h2>Send to device</h2>
-      <textarea
-        placeholder={
-          type === "checklist"
-            ? "One checklist item per line…"
-            : "Paste a link, command, snippet, or note…"
-        }
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
+      {type === "agent_task" ? (
+        <div className="stack">
+          <input
+            type="text"
+            placeholder="action (e.g. echo, read_file, run_command)"
+            value={taskAction}
+            onChange={(e) => setTaskAction(e.target.value)}
+          />
+          <textarea
+            placeholder={'params as JSON, e.g. {"command": "pnpm test"}'}
+            value={taskParams}
+            onChange={(e) => setTaskParams(e.target.value)}
+          />
+          <p className="muted">
+            Routed to a desktop agent (docs/Roadmap.md Phase 5) — it never runs
+            anything without approving the request first.
+          </p>
+        </div>
+      ) : (
+        <textarea
+          placeholder={
+            type === "checklist"
+              ? "One checklist item per line…"
+              : type === "command"
+                ? "A shell command for a desktop agent to run — it will ask before executing…"
+                : "Paste a link, command, snippet, or note…"
+          }
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+      )}
       <select value={type} onChange={(e) => setType(e.target.value as MeshObjectType | "auto")}>
         <option value="auto">Auto-detect type</option>
         <option value="text">Text</option>
         <option value="link">Link</option>
-        <option value="code">Code / command</option>
+        <option value="code">Code snippet</option>
+        <option value="command">Command (for a desktop agent)</option>
         <option value="checklist">Checklist (one item per line)</option>
+        <option value="agent_task">Agent task (structured, for a desktop agent)</option>
       </select>
       {file ? (
         <div className="row" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -338,7 +393,11 @@ export function SendPanel(props: {
         Require confirmation before delivery counts as accepted
       </label>
       <button
-        disabled={busy || (!text.trim() && !file) || recipients.length === 0}
+        disabled={
+          busy ||
+          recipients.length === 0 ||
+          (type === "agent_task" ? !taskAction.trim() : !text.trim() && !file)
+        }
         onClick={() => void send()}
       >
         Send

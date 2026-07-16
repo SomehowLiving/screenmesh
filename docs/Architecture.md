@@ -244,28 +244,26 @@ The server **cannot** read notes, files, clipboard data, or commands. It does se
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `@screenmesh/protocol` | Types, envelope/operation/bundle schemas, constants | — |
-| `@screenmesh/crypto` | Device identity (Ed25519), key agreement (X25519), payload encryption (AES-GCM), pairing payloads | protocol |
+| `@screenmesh/crypto` | Device identity (Ed25519), key agreement (X25519), per-pair Double Ratchet, payload encryption (AES-GCM), pairing payloads, identity JSON persistence for non-browser runtimes | protocol |
 | `@screenmesh/transport` | `MeshTransport` interface, WebRTC / WebSocket / QR adapters, negotiation | protocol |
-| `@screenmesh/storage` | Dexie schemas and persistence for oplog, outbox, inbox, devices | protocol |
-| `@screenmesh/sync` | Operation log, CRDT (Yjs) integration, delivery lifecycle, store–carry–forward | protocol, crypto, storage, transport |
+| `@screenmesh/storage` | Dexie schemas and persistence for oplog, outbox, inbox, devices, ratchet sessions | protocol |
+| `@screenmesh/sync` | Operation log, CRDT (Yjs) integration, delivery lifecycle, store–carry–forward, capability resolution | protocol, crypto, storage, transport |
 | `@screenmesh/web` | React PWA | all packages |
 | `@screenmesh/server` | Fastify signaling + relay | protocol |
+| `@screenmesh/agent` | Desktop agent CLI — Node process reusing crypto/sync/transport directly; approval-gated command/agent_task execution | protocol, crypto, storage, sync, transport |
 
-Dependency rule: packages may only depend downward in this table. `protocol` has zero dependencies; nothing imports from `apps/`.
+Dependency rule: packages may only depend downward in this table. `protocol` has zero dependencies; nothing imports from `apps/`. `apps/agent` depends on packages the same way `apps/web` does — it's a third client of the same shared stack, not a new layer.
 
 ---
 
 ## 7. Beyond the MVP: the device bus
 
-The notes/scratchpad interface is the first visible application. Underneath it, the layers above amount to **identity, pairing, encryption, discovery, transport negotiation, reliable delivery, offline queueing** — a secure, local-first communication fabric for a user's devices. Three of these have shipped:
+The notes/scratchpad interface is the first visible application. Underneath it, the layers above amount to **identity, pairing, encryption, discovery, transport negotiation, reliable delivery, offline queueing** — a secure, local-first communication fabric for a user's devices. All five of Phase 5's device-bus capabilities have shipped:
 
 - **Secure file drop** ✅ — files chunked across multiple small carry-eligible envelopes rather than one giant one, no plaintext cloud hop.
 - **Temporary clipboard tunnel** ✅ — share the clipboard for a few minutes, then erase it (built entirely on expiring objects + delete-after-opening).
 - **Capability routing** ✅ — devices advertise capabilities (phone: camera, GPS; laptop: terminal, filesystem, local models) via presence, and a send can target "whichever device has X" (`MeshEngine.resolveCapability`) instead of naming a specific device. Self-reported and unverified — see docs/Security.md §6.
+- **Developer command channel** ✅ — `apps/agent`, a standalone Node CLI, reuses the exact same crypto/sync/transport packages as the PWA (same ratchet sessions, same relay, same carry-forward) but can actually run what arrives as a `command` object — a browser tab can't spawn a shell, so this is the one piece that genuinely needed a separate local process rather than more web code. Every execution is gated behind an explicit terminal prompt; nothing runs automatically (docs/Security.md §8).
+- **Agent-to-agent tasks** ✅ — a distinct `agent_task` object type (`{action, params}`) carries structured requests rather than raw shell strings; the desktop agent resolves `action` against a small handler registry (`echo`, `read_file`, `run_command`), still behind the same approval gate, and replies with an ordinary `text` object. Deliberately minimal — a few illustrative handlers proving the pattern, not a general plugin system.
 
-Still ahead:
-
-- **Developer command channel** — send `pnpm run integration-test` from phone to laptop, executed only after explicit approval on the receiving device. Needs a trusted local agent process (a browser tab can't spawn a shell) — see Roadmap.md Phase 5.
-- **Agent-to-agent tasks** — structured tasks routed between local AI agents on different devices.
-
-That trajectory — from shared scratchpad to **secure personal device bus** — is what the architecture is shaped for. See [Roadmap.md](Roadmap.md).
+That trajectory — from shared scratchpad to **secure personal device bus** — is what the architecture was shaped for from the start. See [Roadmap.md](Roadmap.md).
