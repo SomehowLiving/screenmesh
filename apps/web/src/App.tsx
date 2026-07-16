@@ -191,7 +191,13 @@ export function App() {
           workspaceKey={wsState.key}
           initialPairing={initialPairing}
         />
-        <DevicesPanel db={db} me={me} workspace={wsState.workspace} engine={session.engine} />
+        <DevicesPanel
+          db={db}
+          me={me}
+          workspace={wsState.workspace}
+          engine={session.engine}
+          onIdentityChange={setMe}
+        />
         <SendPanel db={db} me={me} engine={session.engine} />
         <InboxPanel db={db} me={me} engine={session.engine} />
         <SentPanel db={db} me={me} />

@@ -1,8 +1,10 @@
 ﻿/**
  * Full-stack engine smoke test against a running relay server:
  * three MeshEngines (IndexedDB via fake-indexeddb) exchange objects and
- * exercise the delivery lifecycle, file content, revocation, key
- * rotation, expiring objects, delivery options, and store-carry-forward.
+ * exercise the delivery lifecycle, file content, revocation, per-pair
+ * Double Ratchet encryption, expiring objects, delivery options,
+ * store-carry-forward, chunked file drop, the clipboard tunnel, and
+ * capability routing.
  *
  * Run: pnpm exec tsx packages/sync/scripts/engine-smoke.ts
  */
@@ -10,8 +12,11 @@ import "fake-indexeddb/auto";
 import {
   exportEncryptionPublicKey,
   exportPublicKey,
+  exportRawWorkspaceKey,
   generateIdentity,
   generateWorkspaceKey,
+  initRatchetSession,
+  ratchetEncrypt,
   sealEnvelope,
   sign,
   type DeviceIdentity,
@@ -69,7 +74,7 @@ async function makeEngine(
   workspaceId: string,
   workspaceKey: CryptoKey,
   ownerDeviceId: string,
-): Promise<{ engine: MeshEngine; db: ScreenMeshDb }> {
+): Promise<{ engine: MeshEngine; db: ScreenMeshDb; transport: WebSocketRelayTransport }> {
   const db = new ScreenMeshDb(dbName);
   const transport = new WebSocketRelayTransport(RELAY, {
     deviceId: identity.deviceId,
@@ -85,7 +90,7 @@ async function makeEngine(
     transport,
     sweepIntervalMs: TEST_SWEEP_INTERVAL_MS,
   });
-  return { engine, db };
+  return { engine, db, transport };
 }
 
 async function main(): Promise<void> {
@@ -116,7 +121,7 @@ async function main(): Promise<void> {
     pairingToken: token2,
     device: await info(c, "Engine C", "tablet"),
   });
-  console.log("[1/16] workspace registered with three devices");
+  console.log("[1/19] workspace registered with three devices");
 
   const ea = await makeEngine(a, "engine-a", workspaceId, workspaceKey, a.deviceId);
   const eb = await makeEngine(b, "engine-b", workspaceId, workspaceKey, a.deviceId);
@@ -132,7 +137,30 @@ async function main(): Promise<void> {
       (await ec.db.devices.count()) === 3
     );
   });
-  console.log("[2/16] all engines connected, presence synced");
+  console.log("[2/19] all engines connected, presence synced");
+
+  // Stop C's engine right away: everything through step 13 only involves
+  // A and B, but broadcastOps (editText/updateObjectContent) sends to
+  // EVERY device in the roster, including C — and sendOps/deliverBytes
+  // treats "the relay accepted it" as delivered live regardless of the
+  // RECIPIENT's status, so those sends land in the relay's OWN
+  // server-side queue for C, not A/B's local outbox. Left alone, that
+  // queued traffic would still land on C the moment it reconnects,
+  // conflicting with the carry test below (which relies on this being
+  // A's genuinely FIRST-EVER message to C to exercise the ratchet's
+  // identity-key bootstrap). Removing C from A/B's LOCAL roster is a
+  // test-only simulation of "C isn't part of this conversation yet" —
+  // presence naturally reintroduces it when it reconnects for the carry
+  // test, exactly like a real device joining a live workspace.
+  await ec.engine.stop();
+  await waitFor("C shows offline on A and B", async () => {
+    return (
+      (await ea.db.devices.get(c.deviceId))?.status === "offline" &&
+      (await eb.db.devices.get(c.deviceId))?.status === "offline"
+    );
+  });
+  await ea.db.devices.delete(c.deviceId);
+  await eb.db.devices.delete(c.deviceId);
 
   const object = await ea.engine.sendObject(
     { type: "code", content: { text: "pnpm run integration-test" } },
@@ -143,20 +171,20 @@ async function main(): Promise<void> {
   if ((received?.content as { text: string }).text !== "pnpm run integration-test") {
     throw new Error("content mismatch");
   }
-  console.log("[3/16] object created on A appeared decrypted on B");
+  console.log("[3/19] object created on A appeared decrypted on B");
 
   await waitFor("delivery ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[4/16] A's delivery status advanced to delivered");
+  console.log("[4/19] A's delivery status advanced to delivered");
 
   await eb.engine.markOpened(object.id);
   await waitFor("opened ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "opened";
   });
-  console.log("[5/16] opened receipt propagated back to A");
+  console.log("[5/19] opened receipt propagated back to A");
 
   const pixels = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]);
   const image = await ea.engine.sendObject(
@@ -176,7 +204,7 @@ async function main(): Promise<void> {
   if ((receivedImage?.content as { dataB64: string }).dataB64 !== pixels.toString("base64")) {
     throw new Error("image bytes corrupted in transit");
   }
-  console.log("[6/16] image object with binary content arrived intact");
+  console.log("[6/19] image object with binary content arrived intact");
 
   // Checklist: created on A, toggled on B, LWW-merged back on A.
   const checklist = await ea.engine.sendObject(
@@ -203,7 +231,7 @@ async function main(): Promise<void> {
     const items = (obj?.content as { items: Array<{ id: string; done: boolean }> })?.items;
     return items?.find((i) => i.id === "i1")?.done === true;
   });
-  console.log("[7/16] checklist toggled on B synced back to A");
+  console.log("[7/19] checklist toggled on B synced back to A");
 
   // Yjs: concurrent edits on A and B merge instead of overwriting.
   const note = await ea.engine.sendObject(
@@ -226,7 +254,7 @@ async function main(): Promise<void> {
       onA.includes("shared note")
     );
   });
-  console.log("[8/16] concurrent Yjs edits merged identically on both devices");
+  console.log("[8/19] concurrent Yjs edits merged identically on both devices");
 
   // Continue-on-device: A hands the note to B, which gets a focus request.
   await ea.engine.continueOnDevice(note.id, b.deviceId);
@@ -234,7 +262,7 @@ async function main(): Promise<void> {
     const focus = await eb.db.settings.get("focusObject");
     return (focus?.value as { objectId: string } | undefined)?.objectId === note.id;
   });
-  console.log("[9/16] continue-on-device focus request arrived on B");
+  console.log("[9/19] continue-on-device focus request arrived on B");
 
   // Expiring objects: swept away on both ends once expiresAt passes.
   const expiring = await ea.engine.sendObject(
@@ -249,7 +277,7 @@ async function main(): Promise<void> {
     const delivery = await ea.db.deliveries.where("objectId").equals(expiring.id).first();
     return delivery?.status === "expired";
   });
-  console.log("[10/16] expiring object swept from both devices, delivery marked expired");
+  console.log("[10/19] expiring object swept from both devices, delivery marked expired");
 
   // deleteAfterOpening: recipient's copy vanishes right after markOpened.
   const selfDestruct = await ea.engine.sendObject(
@@ -266,7 +294,7 @@ async function main(): Promise<void> {
   if (await eb.db.objects.get(selfDestruct.id)) {
     throw new Error("deleteAfterOpening did not remove the object on the recipient");
   }
-  console.log("[11/16] deleteAfterOpening removed B's copy right after opening");
+  console.log("[11/19] deleteAfterOpening removed B's copy right after opening");
 
   // requireConfirmation + accept: gated as "pending" until B explicitly accepts.
   const gated = await ea.engine.sendObject(
@@ -288,7 +316,7 @@ async function main(): Promise<void> {
     const delivery = await ea.db.deliveries.where("objectId").equals(gated.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[12/16] requireConfirmation gated delivery until accepted");
+  console.log("[12/19] requireConfirmation gated delivery until accepted");
 
   // requireConfirmation + reject: B declines, A is told, B keeps nothing.
   const declined = await ea.engine.sendObject(
@@ -305,13 +333,20 @@ async function main(): Promise<void> {
   if (await eb.db.objects.get(declined.id)) {
     throw new Error("rejectObject should have removed B's local copy");
   }
-  console.log("[13/16] requireConfirmation reject notified A and cleared B's copy");
+  console.log("[13/19] requireConfirmation reject notified A and cleared B's copy");
 
-  // Store–carry–forward: simulate a bundle addressed to C that couldn't be
-  // delivered directly (e.g. sender had no route at send time) by sealing
-  // it and dropping it straight into A's outbox — exactly the shape
-  // sendObject would have produced. B (online, not the destination) should
-  // pick it up as a carrier via the periodic sweep, and forward it to C.
+  // Store–carry–forward. The relay's OWN server-side queue already
+  // covers "recipient offline, sender/relay fine" (Phase 1) — any send
+  // A's transport can hand to the relay counts as delivered live, so it
+  // never touches A's LOCAL outbox regardless of whether the RECIPIENT
+  // is online. Carry-forward exists for when the relay itself can't be
+  // reached from the sender at all (a lost relay-side queue on restart,
+  // a flaky connection) — simulate that by sealing a bundle exactly the
+  // way sendObject would and dropping it straight into A's outbox,
+  // exactly the shape a failed live send produces. C has been offline
+  // since step 2 (see above), so this is also A's VERY FIRST message
+  // ever to C, exercising the ratchet's identity-key bootstrap end to
+  // end, through a carrier hop.
   const carriedObjectId = crypto.randomUUID();
   const carriedObject = {
     id: carriedObjectId,
@@ -322,11 +357,22 @@ async function main(): Promise<void> {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+  const sessionAtoC = await initRatchetSession({
+    workspaceId,
+    myDeviceId: a.deviceId,
+    myIdentityPublic: a.encryptionPublicKey,
+    myIdentityPrivate: a.encryptionPrivateKey,
+    peerDeviceId: c.deviceId,
+    peerIdentityPublic: c.encryptionPublicKey,
+    pairingSecret: await exportRawWorkspaceKey(workspaceKey),
+  });
+  const { messageKey, header } = await ratchetEncrypt(sessionAtoC);
   const carryEnvelope = await sealEnvelope({
     identity: a,
     recipientDeviceId: c.deviceId,
     workspaceId,
-    workspaceKey,
+    messageKey,
+    ratchetHeader: header,
     plaintext: new TextEncoder().encode(
       JSON.stringify({
         ops: [
@@ -365,6 +411,24 @@ async function main(): Promise<void> {
     const bundle = await ea.db.outbox.get(carryEnvelope.messageId);
     return !!bundle?.offeredTo?.includes(b.deviceId) && bundle.hopLimit === DEFAULT_HOP_LIMIT - 1;
   });
+
+  // Fresh engine + transport, but the SAME local db — simulates the same
+  // physical device reconnecting, not a brand-new one.
+  const cTransport2 = new WebSocketRelayTransport(RELAY, {
+    deviceId: c.deviceId,
+    workspaceId,
+    sign: (data) => sign(c, data),
+  });
+  ec.engine = new MeshEngine({
+    db: ec.db,
+    identity: c,
+    workspaceId,
+    workspaceKey,
+    ownerDeviceId: a.deviceId,
+    transport: cTransport2,
+    sweepIntervalMs: TEST_SWEEP_INTERVAL_MS,
+  });
+  await ec.engine.start();
   await waitFor("C receives the carried object from B", async () => {
     return !!(await ec.db.objects.get(carriedObjectId));
   });
@@ -375,9 +439,77 @@ async function main(): Promise<void> {
   await waitFor("B's carried copy is cleared after forwarding", async () => {
     return !(await eb.db.carried.get(carryEnvelope.messageId));
   });
-  console.log("[14/16] store-carry-forward: B carried A's bundle and delivered it to C");
+  console.log("[14/19] store-carry-forward: B carried A's first-ever message to C and delivered it");
 
-  // Revoke C, then rotate the workspace key.
+  // Secure file drop: a file whose base64 payload exceeds the chunk
+  // threshold travels as a sequence of FILE_CHUNK envelopes, reassembled
+  // on arrival only once every chunk is present.
+  const bigRaw = new Uint8Array(400_000); // well past FILE_CHUNK_THRESHOLD_B64
+  for (let i = 0; i < bigRaw.length; i += 65536) {
+    crypto.getRandomValues(bigRaw.subarray(i, Math.min(i + 65536, bigRaw.length)));
+  }
+  const bigB64 = Buffer.from(bigRaw).toString("base64");
+  const bigFile = await ea.engine.sendObject(
+    {
+      type: "file",
+      content: { name: "big.bin", mimeType: "application/octet-stream", size: bigRaw.length, dataB64: bigB64 },
+    },
+    [b.deviceId],
+  );
+  await waitFor("chunked file fully reassembled on B", async () => {
+    return !!(await eb.db.objects.get(bigFile.id));
+  });
+  const bigOnB = await eb.db.objects.get(bigFile.id);
+  const bigContent = bigOnB?.content as { dataB64: string; name: string };
+  if (bigContent.dataB64 !== bigB64 || bigContent.dataB64.length !== bigB64.length) {
+    throw new Error("chunked file did not reassemble byte-for-byte");
+  }
+  await waitFor("A sees the chunked file delivered", async () => {
+    const delivery = await ea.db.deliveries.where("objectId").equals(bigFile.id).first();
+    return delivery?.status === "delivered";
+  });
+  console.log("[15/19] secure file drop: large file chunked, reassembled byte-for-byte, delivery acked");
+
+  // Temporary clipboard tunnel: same expiring-object + deleteAfterOpening
+  // machinery as Phase 2, just a dedicated content type.
+  const clip = await ea.engine.sendObject(
+    { type: "clipboard", content: { text: "ssh mykey@server.example" } },
+    [b.deviceId],
+    { expiresAt: Date.now() + 60_000, deleteAfterOpening: true },
+  );
+  await waitFor("clipboard share reaches B", async () => !!(await eb.db.objects.get(clip.id)));
+  const clipOnB = await eb.db.objects.get(clip.id);
+  if ((clipOnB?.content as { text: string })?.text !== "ssh mykey@server.example") {
+    throw new Error("clipboard content mismatch on B");
+  }
+  await eb.engine.markOpened(clip.id);
+  await waitFor("clipboard share erases itself on B after opening", async () => {
+    return !(await eb.db.objects.get(clip.id));
+  });
+  console.log("[16/19] temporary clipboard tunnel: shared, received, erased on first paste");
+
+  // Capability routing: B advertises "terminal" via the real HTTP API (so
+  // it flows through the same presence path a real client would use); A
+  // resolves it and gets B back, ranked online-first.
+  await post(`${SERVER}/workspaces/${workspaceId}/capabilities`, {
+    deviceId: b.deviceId,
+    capabilities: ["terminal"],
+  });
+  await waitFor("A sees B's advertised capability", async () => {
+    return !!(await ea.db.devices.get(b.deviceId))?.capabilities?.includes("terminal");
+  });
+  const resolved = await ea.engine.resolveCapability("terminal");
+  if (resolved.length !== 1 || resolved[0]?.id !== b.deviceId) {
+    throw new Error(`expected resolveCapability("terminal") to return only B, got ${JSON.stringify(resolved)}`);
+  }
+  if (resolved[0]?.status !== "online") {
+    throw new Error("expected B to resolve as online");
+  }
+  console.log("[17/19] capability routing: A resolved \"terminal\" to B via presence-advertised capabilities");
+
+  // Revoke C. Per-pair ratcheting means this needs no group-wide rekey —
+  // the owner just drops the local ratchet session with C and the relay
+  // refuses C's next connection; A-B's session is untouched by any of it.
   const revokeRes = await fetch(`${SERVER}/workspaces/${workspaceId}/revoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -385,8 +517,6 @@ async function main(): Promise<void> {
   });
   if (!revokeRes.ok) throw new Error(`revoke failed: ${revokeRes.status}`);
   await ea.engine.revokeDevice(c.deviceId);
-  const newEpoch = await ea.engine.rotateWorkspaceKey();
-  if (newEpoch !== 1) throw new Error(`expected epoch 1, got ${newEpoch}`);
 
   const tcRevoked = new WebSocketRelayTransport(RELAY, {
     deviceId: c.deviceId,
@@ -403,22 +533,26 @@ async function main(): Promise<void> {
   await waitFor("C removed from A's roster", async () => {
     return !(await ea.db.devices.get(c.deviceId));
   });
-  console.log("[15/16] revoked device rejected by relay and pruned from roster");
+  if (await ea.db.ratchets.get(c.deviceId)) {
+    throw new Error("A's ratchet session with the revoked device should have been dropped");
+  }
+  console.log("[18/19] revoked device rejected by relay; A dropped its ratchet session with C");
 
-  // B must have adopted epoch 1 via the ECDH-wrapped ROTATE_KEY op:
-  // a fresh object from A (sealed under epoch 1) must still decrypt on B.
-  const postRotation = await ea.engine.sendObject(
-    { type: "text", content: { text: "sealed under the rotated key" } },
+  // Prove revocation is pairwise-isolated: A-B keeps working completely
+  // unaffected — no rekey, no interruption, because their ratchet session
+  // never involved C in the first place.
+  const postRevocation = await ea.engine.sendObject(
+    { type: "text", content: { text: "unaffected by C's revocation" } },
     [b.deviceId],
   );
-  await waitFor("post-rotation object to reach B", async () => {
-    return !!(await eb.db.objects.get(postRotation.id));
+  await waitFor("post-revocation object reaches B", async () => {
+    return !!(await eb.db.objects.get(postRevocation.id));
   });
-  const rotatedObj = await eb.db.objects.get(postRotation.id);
-  if ((rotatedObj?.content as { text: string }).text !== "sealed under the rotated key") {
-    throw new Error("post-rotation content mismatch");
+  const postRevocationObj = await eb.db.objects.get(postRevocation.id);
+  if ((postRevocationObj?.content as { text: string }).text !== "unaffected by C's revocation") {
+    throw new Error("post-revocation content mismatch");
   }
-  console.log("[16/16] workspace key rotated; B decrypts epoch-1 traffic, C is locked out");
+  console.log("[19/19] A-B ratchet session unaffected by C's revocation — no group rekey needed");
 
   await ea.engine.stop();
   await eb.engine.stop();

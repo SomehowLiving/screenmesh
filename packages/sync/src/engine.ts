@@ -12,6 +12,8 @@ import {
   type DeliveryBundle,
   type Device,
   type EnvelopeJson,
+  type FileChunkPayload,
+  type FileContent,
   type MeshObject,
   type MeshObjectType,
   type ObjectRefPayload,
@@ -19,7 +21,6 @@ import {
   type OperationType,
   type PresenceEntry,
   type RevokeDevicePayload,
-  type RotateKeyPayload,
   type SendOptions,
   type SendToDevicePayload,
   type TextContent,
@@ -27,18 +28,19 @@ import {
   type YjsUpdatePayload,
 } from "@screenmesh/protocol";
 import {
+  decryptEnvelope,
   exportRawWorkspaceKey,
-  generateWorkspaceKey,
   importEncryptionPublicKey,
   importPublicKey,
-  importRawWorkspaceKey,
-  openEnvelope,
+  initRatchetSession,
+  ratchetDecrypt,
+  ratchetEncrypt,
   sealEnvelope,
-  unwrapKeyBytes,
-  wrapKeyBytes,
+  verifyEnvelope,
   type DeviceIdentity,
+  type RatchetSession,
 } from "@screenmesh/crypto";
-import type { ScreenMeshDb } from "@screenmesh/storage";
+import type { PersistedRatchetSession, ScreenMeshDb } from "@screenmesh/storage";
 import type { WebSocketRelayTransport } from "@screenmesh/transport";
 
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -48,6 +50,15 @@ const DEFAULT_SWEEP_INTERVAL_MS = 15_000;
 
 /** Object types whose text is collaboratively editable via Yjs. */
 const EDITABLE_TYPES = new Set(["text", "code", "link"]);
+
+/**
+ * Secure file drop: files whose base64 payload exceeds this many
+ * characters (~150 KB raw) are split into chunks, each its own envelope
+ * (own ratchet message, own carry-eligibility), rather than one giant
+ * envelope. Keeps individual messages small regardless of file size.
+ */
+const FILE_CHUNK_SIZE_B64 = 200_000;
+const FILE_CHUNK_THRESHOLD_B64 = FILE_CHUNK_SIZE_B64;
 
 /** Apply `next` to a Y.Text as a minimal splice (common prefix/suffix). */
 function applyTextDiff(ytext: Y.Text, next: string): void {
@@ -78,9 +89,10 @@ export interface EngineConfig {
   db: ScreenMeshDb;
   identity: DeviceIdentity;
   workspaceId: string;
-  /** Epoch-0 workspace key (from the pairing QR). */
+  /** Pairing secret from the QR — seeds every pairwise ratchet session
+   *  (docs/Security.md §5), not used to encrypt anything directly. */
   workspaceKey: CryptoKey;
-  /** Only this device may rotate keys or revoke devices. */
+  /** Only this device may revoke devices. */
   ownerDeviceId: string;
   transport: WebSocketRelayTransport;
   /** Optional peer-to-peer channel tried before the relay (WebRTC). */
@@ -100,16 +112,21 @@ export interface EngineConfig {
 export class MeshEngine {
   private seq = 0;
   private readonly peerKeys = new Map<string, CryptoKey>();
-  /** Workspace keys by epoch; old epochs stay decryptable. */
-  private readonly keys = new Map<number, CryptoKey>();
-  private currentEpoch = 0;
+  /** In-memory Double Ratchet sessions, one per peer device. */
+  private readonly ratchets = new Map<string, RatchetSession>();
+  /** Raw bytes of the pairing secret, computed once in start(). */
+  private pairingSecret!: Uint8Array;
   /** In-memory Yjs docs for collaboratively edited objects. */
   private readonly ydocs = new Map<string, Y.Doc>();
+  /** In-progress file reassembly buffers, keyed by fileId (in-memory only —
+   *  a reload mid-transfer loses partial progress and needs a re-send). */
+  private readonly incomingChunks = new Map<
+    string,
+    { total: number; chunks: Map<number, string>; meta?: FileChunkPayload["meta"] }
+  >();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly cfg: EngineConfig) {
-    this.keys.set(0, cfg.workspaceKey);
-  }
+  constructor(private readonly cfg: EngineConfig) {}
 
   private get me(): string {
     return this.cfg.identity.deviceId;
@@ -123,11 +140,12 @@ export class MeshEngine {
     const seqSetting = await this.cfg.db.settings.get("mySeq");
     this.seq = typeof seqSetting?.value === "number" ? seqSetting.value : 0;
 
-    const rotated = await this.cfg.db.settings.get("rotatedKeys");
-    for (const entry of (rotated?.value as Array<{ epoch: number; key: CryptoKey }>) ?? []) {
-      this.keys.set(entry.epoch, entry.key);
-      if (entry.epoch > this.currentEpoch) this.currentEpoch = entry.epoch;
+    this.pairingSecret = await exportRawWorkspaceKey(this.cfg.workspaceKey);
+    for (const row of await this.cfg.db.ratchets.toArray()) {
+      const { peerDeviceId, ...session } = row;
+      this.ratchets.set(peerDeviceId, session as unknown as RatchetSession);
     }
+
     await this.cfg.db.seen
       .where("seenAt")
       .below(this.now() - SEEN_RETENTION_MS)
@@ -195,6 +213,12 @@ export class MeshEngine {
       seedUpdateB64 = toBase64(Y.encodeStateAsUpdate(doc));
     }
 
+    // Secure file drop: large files travel as a sequence of small chunk
+    // envelopes instead of one giant one (see FILE_CHUNK_THRESHOLD_B64).
+    const asFile =
+      (object.type === "file" || object.type === "image") && (object.content as FileContent);
+    const chunked = asFile && asFile.dataB64.length > FILE_CHUNK_THRESHOLD_B64;
+
     for (const recipientId of recipientIds) {
       const delivery: Delivery = {
         id: crypto.randomUUID(),
@@ -206,34 +230,83 @@ export class MeshEngine {
         ...(Object.keys(options).length > 0 ? { options } : {}),
       };
       await this.cfg.db.deliveries.add(delivery);
-      const ops: Operation<unknown>[] = [
-        this.makeOp("CREATE_OBJECT", object.id, {
-          object,
-        } satisfies CreateObjectPayload),
-      ];
-      if (seedUpdateB64 !== null) {
+
+      let sentLive: boolean;
+      if (chunked && asFile) {
+        sentLive = await this.sendFileChunks(object, asFile, recipientId, options);
+      } else {
+        const ops: Operation<unknown>[] = [
+          this.makeOp("CREATE_OBJECT", object.id, {
+            object,
+          } satisfies CreateObjectPayload),
+        ];
+        if (seedUpdateB64 !== null) {
+          ops.push(
+            this.makeOp("YJS_UPDATE", object.id, {
+              objectId: object.id,
+              updateB64: seedUpdateB64,
+            } satisfies YjsUpdatePayload),
+          );
+        }
         ops.push(
-          this.makeOp("YJS_UPDATE", object.id, {
+          this.makeOp("SEND_TO_DEVICE", object.id, {
             objectId: object.id,
-            updateB64: seedUpdateB64,
-          } satisfies YjsUpdatePayload),
+            options,
+          } satisfies SendToDevicePayload),
         );
+        // Real object deliveries are carry-eligible: if this recipient is
+        // unreachable directly, another online device may later carry the
+        // encrypted bundle on our behalf (docs/Architecture.md §2).
+        sentLive = await this.sendOps(recipientId, ops, DEFAULT_HOP_LIMIT);
       }
-      ops.push(
-        this.makeOp("SEND_TO_DEVICE", object.id, {
-          objectId: object.id,
-          options,
-        } satisfies SendToDevicePayload),
-      );
-      // Real object deliveries are carry-eligible: if this recipient is
-      // unreachable directly, another online device may later carry the
-      // encrypted bundle on our behalf (docs/Architecture.md §2).
-      const sentLive = await this.sendOps(recipientId, ops, DEFAULT_HOP_LIMIT);
       if (sentLive) {
         await this.cfg.db.deliveries.update(delivery.id, { status: "sending" });
       }
     }
     return object;
+  }
+
+  /** Send a large file as a sequence of small chunk envelopes; each chunk
+   *  is its own carry-eligible envelope. Returns true only if every chunk
+   *  went out live (matching sendOps' live/queued return contract). */
+  private async sendFileChunks(
+    object: MeshObject,
+    file: FileContent,
+    recipientId: string,
+    options: SendOptions,
+  ): Promise<boolean> {
+    const totalChunks = Math.ceil(file.dataB64.length / FILE_CHUNK_SIZE_B64);
+    let allLive = true;
+    for (let i = 0; i < totalChunks; i++) {
+      const dataB64 = file.dataB64.slice(i * FILE_CHUNK_SIZE_B64, (i + 1) * FILE_CHUNK_SIZE_B64);
+      const payload: FileChunkPayload = {
+        fileId: object.id,
+        chunkIndex: i,
+        totalChunks,
+        dataB64,
+        ...(i === 0
+          ? {
+              meta: {
+                objectType: object.type as "file" | "image",
+                name: file.name,
+                mimeType: file.mimeType,
+                size: file.size,
+                createdBy: object.createdBy,
+                createdAt: object.createdAt,
+                ...(object.expiresAt !== undefined ? { expiresAt: object.expiresAt } : {}),
+                ...(Object.keys(options).length > 0 ? { options } : {}),
+              },
+            }
+          : {}),
+      };
+      const sentLive = await this.sendOps(
+        recipientId,
+        [this.makeOp("FILE_CHUNK", object.id, payload)],
+        DEFAULT_HOP_LIMIT,
+      );
+      if (!sentLive) allLive = false;
+    }
+    return allLive;
   }
 
   /**
@@ -409,9 +482,30 @@ export class MeshEngine {
   }
 
   /**
+   * Capability routing (docs/Roadmap.md Phase 5): "send this to whichever
+   * device has a terminal" instead of naming a specific device. Online
+   * devices advertising the capability come first (an immediate, direct
+   * send); offline ones are included after (queued/carried like any other
+   * delivery) so the request isn't silently dropped if nobody's online
+   * right now — the caller decides whether to include those.
+   */
+  async resolveCapability(capability: string): Promise<Device[]> {
+    const matches = (await this.cfg.db.devices.toArray()).filter(
+      (d) => d.id !== this.me && d.capabilities?.includes(capability),
+    );
+    return matches.sort((a, b) => {
+      if (a.status === b.status) return 0;
+      return a.status === "online" ? -1 : 1;
+    });
+  }
+
+  /**
    * Owner-side revocation: tell the remaining devices and drop the device
    * locally. Relay enforcement (rejecting the revoked device) happens via
-   * the HTTP revoke endpoint — see docs/Security.md §2.
+   * the HTTP revoke endpoint — see docs/Security.md §2. Unlike the old
+   * shared-workspace-key model, no group-wide rekey is needed: ratchet
+   * sessions are pairwise, so dropping this one session doesn't touch
+   * anyone else's secrecy (docs/Security.md §5).
    */
   async revokeDevice(deviceId: string): Promise<void> {
     const others = (await this.cfg.db.devices.toArray()).filter(
@@ -426,64 +520,60 @@ export class MeshEngine {
     }
     await this.cfg.db.devices.delete(deviceId);
     this.peerKeys.delete(deviceId);
-  }
-
-  /**
-   * Owner-side key rotation (docs/Security.md §5): generate a fresh
-   * workspace key and send it to each remaining device wrapped via X25519
-   * ECDH — the revoked device cannot unwrap it, so everything sent after
-   * rotation is cryptographically out of its reach. Old epochs are kept
-   * so history and in-flight envelopes stay readable.
-   */
-  async rotateWorkspaceKey(): Promise<number> {
-    if (this.me !== this.cfg.ownerDeviceId) {
-      throw new Error("only the workspace owner can rotate keys");
-    }
-    const newEpoch = this.currentEpoch + 1;
-    const newKey = await generateWorkspaceKey();
-    const rawKey = await exportRawWorkspaceKey(newKey);
-
-    const others = (await this.cfg.db.devices.toArray()).filter(
-      (d) => d.id !== this.me,
-    );
-    for (const device of others) {
-      if (!device.encryptionKey) {
-        console.warn(
-          `screenmesh: device ${device.name} has no encryption key (paired before rotation support) — it will lose access after rotation; re-pair it`,
-        );
-        continue;
-      }
-      const theirPublic = await importEncryptionPublicKey(device.encryptionKey);
-      const wrapped = await wrapKeyBytes(
-        this.cfg.identity.encryptionPrivateKey,
-        theirPublic,
-        rawKey,
-      );
-      // Sent under the CURRENT epoch (outer layer); the new key itself is
-      // protected by the pairwise ECDH wrap, not by the old workspace key.
-      await this.sendOps(device.id, [
-        this.makeOp("ROTATE_KEY", undefined, {
-          epoch: newEpoch,
-          wrappedKeyB64: wrapped.wrappedKeyB64,
-          nonceB64: wrapped.nonceB64,
-        } satisfies RotateKeyPayload),
-      ]);
-    }
-
-    await this.adoptKey(newEpoch, newKey);
-    return newEpoch;
-  }
-
-  private async adoptKey(epoch: number, key: CryptoKey): Promise<void> {
-    this.keys.set(epoch, key);
-    if (epoch > this.currentEpoch) this.currentEpoch = epoch;
-    const rotated = [...this.keys.entries()]
-      .filter(([e]) => e > 0)
-      .map(([e, k]) => ({ epoch: e, key: k }));
-    await this.cfg.db.settings.put({ key: "rotatedKeys", value: rotated });
+    this.ratchets.delete(deviceId);
+    await this.cfg.db.ratchets.delete(deviceId);
   }
 
   // --- internals ---
+
+  /**
+   * Get-or-create the Double Ratchet session with a peer (docs/Security.md
+   * §5). Bootstraps from the peer's X25519 identity key (learned via
+   * presence) and the workspace pairing secret; every pair in the
+   * workspace gets its own independent session, so revoking one device
+   * never requires touching anyone else's secrecy.
+   */
+  private async ratchetSessionFor(peerDeviceId: string): Promise<RatchetSession> {
+    const cached = this.ratchets.get(peerDeviceId);
+    if (cached) return cached;
+
+    const stored = await this.cfg.db.ratchets.get(peerDeviceId);
+    if (stored) {
+      const { peerDeviceId: _discard, ...session } = stored;
+      const restored = session as unknown as RatchetSession;
+      this.ratchets.set(peerDeviceId, restored);
+      return restored;
+    }
+
+    const peer = await this.cfg.db.devices.get(peerDeviceId);
+    if (!peer?.encryptionKey) {
+      throw new Error(
+        `cannot start a ratchet session with ${peerDeviceId}: no encryption key on file`,
+      );
+    }
+    const session = await initRatchetSession({
+      workspaceId: this.cfg.workspaceId,
+      myDeviceId: this.me,
+      myIdentityPublic: this.cfg.identity.encryptionPublicKey,
+      myIdentityPrivate: this.cfg.identity.encryptionPrivateKey,
+      peerDeviceId,
+      peerIdentityPublic: await importEncryptionPublicKey(peer.encryptionKey),
+      pairingSecret: this.pairingSecret,
+    });
+    this.ratchets.set(peerDeviceId, session);
+    await this.persistRatchetSession(peerDeviceId, session);
+    return session;
+  }
+
+  private async persistRatchetSession(
+    peerDeviceId: string,
+    session: RatchetSession,
+  ): Promise<void> {
+    await this.cfg.db.ratchets.put({
+      peerDeviceId,
+      ...session,
+    } as unknown as PersistedRatchetSession);
+  }
 
   private makeOp<T>(
     type: OperationType,
@@ -515,18 +605,20 @@ export class MeshEngine {
     this.seq += 1;
     await this.cfg.db.settings.put({ key: "mySeq", value: this.seq });
 
-    const workspaceKey = this.keys.get(this.currentEpoch);
-    if (!workspaceKey) throw new Error(`missing workspace key epoch ${this.currentEpoch}`);
+    const session = await this.ratchetSessionFor(recipientId);
+    const { messageKey, header } = await ratchetEncrypt(session);
+    await this.persistRatchetSession(recipientId, session);
+
     const plaintext = new TextEncoder().encode(JSON.stringify({ ops }));
     const envelope = await sealEnvelope({
       identity: this.cfg.identity,
       recipientDeviceId: recipientId,
       workspaceId: this.cfg.workspaceId,
-      workspaceKey,
+      messageKey,
+      ratchetHeader: header,
       plaintext,
       sequenceNumber: this.seq,
       createdAt: this.now(),
-      keyEpoch: this.currentEpoch,
     });
     const json = envelopeToJson(envelope);
     const bytes = new TextEncoder().encode(JSON.stringify(json));
@@ -689,15 +781,27 @@ export class MeshEngine {
     }
   }
 
-  /** Runs on a timer (and once at startup / on presence change) to advance
-   *  expiry and store-carry-forward without needing a user action. */
+  /**
+   * Runs on a timer (and once at startup / on presence change) to advance
+   * expiry and store-carry-forward without needing a user action. Guarded
+   * against re-entrancy: the timer and presence updates can both trigger
+   * this close together, and running attemptCarriedDelivery/offerCarrying
+   * concurrently with itself would let both invocations read the
+   * carried/outbox tables before either deletes its entry — forwarding
+   * (or offering) the same bundle twice.
+   */
+  private sweeping = false;
   private async periodicSweep(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
     try {
       await this.sweepExpiredObjects();
       await this.attemptCarriedDelivery();
       await this.offerCarrying();
     } catch (err) {
       console.error("screenmesh: periodic sweep failed", err);
+    } finally {
+      this.sweeping = false;
     }
   }
 
@@ -710,14 +814,21 @@ export class MeshEngine {
     if (envelope.workspaceId !== this.cfg.workspaceId) return;
     if (await this.cfg.db.seen.get(envelope.messageId)) return;
 
-    const workspaceKey = this.keys.get(envelope.keyEpoch);
-    if (!workspaceKey) {
-      throw new Error(
-        `no workspace key for epoch ${envelope.keyEpoch} (envelope ${envelope.messageId})`,
-      );
-    }
+    // Authenticity MUST be checked before the ratchet header is trusted
+    // for anything — deriving a message key mutates session state, and a
+    // forged header (before verification) must never be allowed to do
+    // that. See packages/crypto/src/envelope.ts's module doc comment.
     const senderKey = await this.keyFor(envelope.senderDeviceId);
-    const plaintext = await openEnvelope(envelope, senderKey, workspaceKey, now);
+    await verifyEnvelope(envelope, senderKey, now);
+
+    const session = await this.ratchetSessionFor(envelope.senderDeviceId);
+    const messageKey = await ratchetDecrypt(session, {
+      ratchetPublicKeyB64: envelope.ratchetPublicKeyB64,
+      messageNumber: envelope.messageNumber,
+      previousChainLength: envelope.previousChainLength,
+    });
+    await this.persistRatchetSession(envelope.senderDeviceId, session);
+    const plaintext = await decryptEnvelope(envelope, messageKey);
     await this.cfg.db.seen.add({ messageId: envelope.messageId, seenAt: now });
 
     const { ops } = JSON.parse(new TextDecoder().decode(plaintext)) as {
@@ -775,36 +886,42 @@ export class MeshEngine {
       }
       case "SEND_TO_DEVICE": {
         const { objectId, options } = op.payload as SendToDevicePayload;
-        const existing = await this.cfg.db.deliveries
-          .where("objectId")
-          .equals(objectId)
-          .and(
-            (d) =>
-              d.destinationDeviceId === this.me && d.sourceDeviceId === senderId,
-          )
-          .first();
-        // requireConfirmation gates the recipient behind an explicit
-        // accept/reject — the sender only learns "delivered" once the
-        // user acts (see acceptObject/rejectObject).
-        const gated = !!options?.requireConfirmation;
-        if (!existing) {
-          await this.cfg.db.deliveries.add({
-            id: crypto.randomUUID(),
-            objectId,
-            sourceDeviceId: senderId,
-            destinationDeviceId: this.me,
-            status: gated ? "pending" : "delivered",
-            createdAt: now,
-            ...(gated ? {} : { deliveredAt: now }),
-            ...(options && Object.keys(options).length > 0 ? { options } : {}),
-          });
+        await this.recordIncomingDelivery(senderId, objectId, options, now);
+        break;
+      }
+      case "FILE_CHUNK": {
+        const payload = op.payload as FileChunkPayload;
+        let entry = this.incomingChunks.get(payload.fileId);
+        if (!entry) {
+          entry = { total: payload.totalChunks, chunks: new Map() };
+          this.incomingChunks.set(payload.fileId, entry);
         }
-        if (!gated) {
-          await this.sendOps(senderId, [
-            this.makeOp("MARK_DELIVERED", objectId, {
-              objectId,
-            } satisfies ObjectRefPayload),
-          ]);
+        entry.chunks.set(payload.chunkIndex, payload.dataB64);
+        if (payload.meta) entry.meta = payload.meta;
+
+        if (entry.chunks.size === entry.total && entry.meta) {
+          const meta = entry.meta;
+          let dataB64 = "";
+          for (let i = 0; i < entry.total; i++) dataB64 += entry.chunks.get(i) ?? "";
+          const object: MeshObject = {
+            id: payload.fileId,
+            workspaceId: op.workspaceId,
+            type: meta.objectType,
+            content: {
+              name: meta.name,
+              mimeType: meta.mimeType,
+              size: meta.size,
+              dataB64,
+            } satisfies FileContent,
+            createdBy: meta.createdBy,
+            createdAt: meta.createdAt,
+            updatedAt: meta.createdAt,
+            ...(meta.expiresAt !== undefined ? { expiresAt: meta.expiresAt } : {}),
+          };
+          const existingObject = await this.cfg.db.objects.get(object.id);
+          if (!existingObject) await this.cfg.db.objects.put(object);
+          this.incomingChunks.delete(payload.fileId);
+          await this.recordIncomingDelivery(senderId, object.id, meta.options, now);
         }
         break;
       }
@@ -888,24 +1005,8 @@ export class MeshEngine {
         if (senderId !== this.cfg.ownerDeviceId) break;
         await this.cfg.db.devices.delete(deviceId);
         this.peerKeys.delete(deviceId);
-        break;
-      }
-      case "ROTATE_KEY": {
-        if (senderId !== this.cfg.ownerDeviceId) break;
-        const { epoch, wrappedKeyB64, nonceB64 } = op.payload as RotateKeyPayload;
-        if (this.keys.has(epoch)) break;
-        const sender = await this.cfg.db.devices.get(senderId);
-        if (!sender?.encryptionKey) {
-          console.warn("screenmesh: ROTATE_KEY from a sender without an encryption key");
-          break;
-        }
-        const senderPublic = await importEncryptionPublicKey(sender.encryptionKey);
-        const rawKey = await unwrapKeyBytes(
-          this.cfg.identity.encryptionPrivateKey,
-          senderPublic,
-          { wrappedKeyB64, nonceB64 },
-        );
-        await this.adoptKey(epoch, await importRawWorkspaceKey(rawKey));
+        this.ratchets.delete(deviceId);
+        await this.cfg.db.ratchets.delete(deviceId);
         break;
       }
       default:
@@ -921,6 +1022,7 @@ export class MeshEngine {
       ...(entry.encryptionKey !== undefined
         ? { encryptionKey: entry.encryptionKey }
         : {}),
+      ...(entry.capabilities !== undefined ? { capabilities: entry.capabilities } : {}),
       type: entry.type,
       role: entry.type === "phone" ? "input" : "editor",
       lastSeenAt: entry.lastSeenAt,
@@ -934,8 +1036,45 @@ export class MeshEngine {
 
     // A device just went online — that's the moment carried bundles for
     // it can be forwarded, and a moment a new carrier becomes available.
-    await this.attemptCarriedDelivery();
-    await this.offerCarrying();
+    // Routed through periodicSweep's reentrancy guard so this can't race
+    // the timer-driven sweep (see periodicSweep's doc comment).
+    void this.periodicSweep();
+  }
+
+  /**
+   * Recipient-side bookkeeping shared by SEND_TO_DEVICE (normal objects)
+   * and completed FILE_CHUNK reassembly: record the delivery (gated
+   * "pending" if the sender required confirmation) and ack the sender.
+   */
+  private async recordIncomingDelivery(
+    senderId: string,
+    objectId: string,
+    options: SendOptions | undefined,
+    now: number,
+  ): Promise<void> {
+    const existing = await this.cfg.db.deliveries
+      .where("objectId")
+      .equals(objectId)
+      .and((d) => d.destinationDeviceId === this.me && d.sourceDeviceId === senderId)
+      .first();
+    const gated = !!options?.requireConfirmation;
+    if (!existing) {
+      await this.cfg.db.deliveries.add({
+        id: crypto.randomUUID(),
+        objectId,
+        sourceDeviceId: senderId,
+        destinationDeviceId: this.me,
+        status: gated ? "pending" : "delivered",
+        createdAt: now,
+        ...(gated ? {} : { deliveredAt: now }),
+        ...(options && Object.keys(options).length > 0 ? { options } : {}),
+      });
+    }
+    if (!gated) {
+      await this.sendOps(senderId, [
+        this.makeOp("MARK_DELIVERED", objectId, { objectId } satisfies ObjectRefPayload),
+      ]);
+    }
   }
 
   private async keyFor(deviceId: string): Promise<CryptoKey> {

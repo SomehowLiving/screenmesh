@@ -7,6 +7,7 @@ import type {
   PairingPayload,
   RevokeDeviceRequest,
   RotatePairingRequest,
+  SetCapabilitiesRequest,
 } from "@screenmesh/protocol";
 import {
   createPairingPayload,
@@ -35,6 +36,8 @@ export interface LocalIdentity {
   encryptionPublicKey: CryptoKey;
   encryptionPrivateKey: CryptoKey;
   encryptionKeyB64: string;
+  /** Capabilities this device advertises (docs/Roadmap.md Phase 5). */
+  capabilities: string[];
 }
 
 export interface LocalWorkspace {
@@ -114,6 +117,7 @@ function deviceInfo(me: LocalIdentity): DeviceInfo {
     publicKey: me.publicKeyB64,
     encryptionKey: me.encryptionKeyB64,
     type: me.deviceType,
+    ...(me.capabilities.length > 0 ? { capabilities: me.capabilities } : {}),
   };
 }
 
@@ -163,6 +167,11 @@ export async function loadLocal(db: ScreenMeshDb): Promise<{
     };
     await db.settings.put({ key: "identity", value: localIdentity });
   }
+  // Identities created before capability routing lack the field.
+  if (localIdentity && !localIdentity.capabilities) {
+    localIdentity = { ...localIdentity, capabilities: [] };
+    await db.settings.put({ key: "identity", value: localIdentity });
+  }
   return {
     identity: localIdentity,
     workspace: (workspace?.value as LocalWorkspace | undefined) ?? null,
@@ -186,6 +195,7 @@ export async function createLocalIdentity(
     encryptionPublicKey: generated.encryptionPublicKey,
     encryptionPrivateKey: generated.encryptionPrivateKey,
     encryptionKeyB64: await exportEncryptionPublicKey(generated.encryptionPublicKey),
+    capabilities: [],
   };
   await db.settings.put({ key: "identity", value: identity });
   return identity;
@@ -317,6 +327,9 @@ export async function rotatePairing(
 /**
  * Owner-side revocation: server enforcement first (the device can no
  * longer authenticate), then notify the remaining devices via the engine.
+ * No group-wide rekey is needed — ratchet sessions are pairwise, so the
+ * revoked device's secrecy loss doesn't touch anyone else's session
+ * (docs/Security.md §5).
  */
 export async function revokeDevice(
   me: LocalIdentity,
@@ -327,9 +340,24 @@ export async function revokeDevice(
   const body: RevokeDeviceRequest = { ownerDeviceId: me.deviceId, deviceId };
   await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/revoke`, body);
   await engine.revokeDevice(deviceId);
-  // Rotate the workspace key so the revoked device (which still holds the
-  // old key) cannot decrypt anything sent from now on.
-  await engine.rotateWorkspaceKey();
+}
+
+/**
+ * Capability routing (docs/Roadmap.md Phase 5): update what this device
+ * advertises to the rest of the workspace and persist it locally so it's
+ * re-sent on the next join/create too.
+ */
+export async function setCapabilities(
+  db: ScreenMeshDb,
+  me: LocalIdentity,
+  workspace: LocalWorkspace,
+  capabilities: string[],
+): Promise<LocalIdentity> {
+  const body: SetCapabilitiesRequest = { deviceId: me.deviceId, capabilities };
+  await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/capabilities`, body);
+  const updated: LocalIdentity = { ...me, capabilities };
+  await db.settings.put({ key: "identity", value: updated });
+  return updated;
 }
 
 /**

@@ -2,20 +2,27 @@
  * End-to-end smoke test against a running relay server (pnpm dev:server):
  *   1. Device A creates a workspace; device B joins with the pairing token.
  *   2. Both authenticate to the relay by signing the server's nonce.
- *   3. A seals an encrypted envelope to B; B receives, verifies, decrypts.
+ *   3. A ratchet-seals an encrypted envelope to B; B receives, verifies, decrypts.
  *   4. B disconnects; A sends again; B reconnects and receives the queued
  *      envelope (store-and-forward).
  *
  * Run: pnpm exec tsx packages/sync/scripts/smoke.ts
  */
 import {
+  exportEncryptionPublicKey,
   exportPublicKey,
+  exportRawWorkspaceKey,
   generateIdentity,
   generateWorkspaceKey,
   importPublicKey,
-  openEnvelope,
+  initRatchetSession,
+  ratchetDecrypt,
+  ratchetEncrypt,
   sealEnvelope,
   sign,
+  verifyEnvelope,
+  decryptEnvelope,
+  type RatchetSession,
 } from "@screenmesh/crypto";
 import { WebSocketRelayTransport } from "@screenmesh/transport";
 import {
@@ -68,14 +75,16 @@ async function main(): Promise<void> {
   const b = await generateIdentity();
   const aPub = await exportPublicKey(a.publicKey);
   const bPub = await exportPublicKey(b.publicKey);
-  const workspaceKey = await generateWorkspaceKey();
+  const aEncKey = await exportEncryptionPublicKey(a.encryptionPublicKey);
+  const bEncKey = await exportEncryptionPublicKey(b.encryptionPublicKey);
+  const pairingSecret = await exportRawWorkspaceKey(await generateWorkspaceKey());
   const workspaceId = crypto.randomUUID();
   const pairingToken = crypto.randomUUID();
 
   // 1. Register + join
   await post(`${SERVER}/workspaces`, {
     workspace: { id: workspaceId, name: "smoke", createdAt: Date.now() },
-    device: { id: a.deviceId, name: "Device A", publicKey: aPub, type: "laptop" },
+    device: { id: a.deviceId, name: "Device A", publicKey: aPub, encryptionKey: aEncKey, type: "laptop" },
     pairingToken,
     tokenExpiresAt: Date.now() + 60_000,
   } satisfies CreateWorkspaceRequest);
@@ -84,7 +93,7 @@ async function main(): Promise<void> {
     `${SERVER}/workspaces/${workspaceId}/join`,
     {
       pairingToken,
-      device: { id: b.deviceId, name: "Device B", publicKey: bPub, type: "phone" },
+      device: { id: b.deviceId, name: "Device B", publicKey: bPub, encryptionKey: bEncKey, type: "phone" },
     } satisfies JoinWorkspaceRequest,
   );
   assert(joined.devices.length === 2, "join should report both devices");
@@ -114,25 +123,50 @@ async function main(): Promise<void> {
   assert(discovered, "A should discover B online");
   console.log("[2/4] both devices authenticated to the relay");
 
+  // A's and B's per-pair ratchet sessions (mirrors what MeshEngine does
+  // internally — see packages/sync/src/engine.ts ratchetSessionFor).
+  const sessionA: RatchetSession = await initRatchetSession({
+    workspaceId,
+    myDeviceId: a.deviceId,
+    myIdentityPublic: a.encryptionPublicKey,
+    myIdentityPrivate: a.encryptionPrivateKey,
+    peerDeviceId: b.deviceId,
+    peerIdentityPublic: b.encryptionPublicKey,
+    pairingSecret,
+  });
+  const sessionB: RatchetSession = await initRatchetSession({
+    workspaceId,
+    myDeviceId: b.deviceId,
+    myIdentityPublic: b.encryptionPublicKey,
+    myIdentityPrivate: b.encryptionPrivateKey,
+    peerDeviceId: a.deviceId,
+    peerIdentityPublic: a.encryptionPublicKey,
+    pairingSecret,
+  });
+
   // 3. Live encrypted envelope A -> B
   const message1 = { ops: [{ hello: "from A", n: 1 }] };
+  const enc1 = await ratchetEncrypt(sessionA);
   const env1 = await sealEnvelope({
     identity: a,
     recipientDeviceId: b.deviceId,
     workspaceId,
-    workspaceKey,
+    messageKey: enc1.messageKey,
+    ratchetHeader: enc1.header,
     plaintext: new TextEncoder().encode(JSON.stringify(message1)),
     sequenceNumber: 1,
     createdAt: Date.now(),
   });
   ta.sendEnvelope(envelopeToJson(env1));
   const receivedJson = await withTimeout(firstDelivery, 5000, "live envelope");
-  const opened1 = await openEnvelope(
-    envelopeFromJson(receivedJson),
-    await importPublicKey(aPub),
-    workspaceKey,
-    Date.now(),
-  );
+  const received1 = envelopeFromJson(receivedJson);
+  await verifyEnvelope(received1, await importPublicKey(aPub), Date.now());
+  const key1 = await ratchetDecrypt(sessionB, {
+    ratchetPublicKeyB64: received1.ratchetPublicKeyB64,
+    messageNumber: received1.messageNumber,
+    previousChainLength: received1.previousChainLength,
+  });
+  const opened1 = await decryptEnvelope(received1, key1);
   assert(
     new TextDecoder().decode(opened1) === JSON.stringify(message1),
     "decrypted payload should match",
@@ -143,11 +177,13 @@ async function main(): Promise<void> {
   await tb.disconnect();
   await new Promise((r) => setTimeout(r, 300));
   const message2 = { ops: [{ hello: "queued for B", n: 2 }] };
+  const enc2 = await ratchetEncrypt(sessionA);
   const env2 = await sealEnvelope({
     identity: a,
     recipientDeviceId: b.deviceId,
     workspaceId,
-    workspaceKey,
+    messageKey: enc2.messageKey,
+    ratchetHeader: enc2.header,
     plaintext: new TextEncoder().encode(JSON.stringify(message2)),
     sequenceNumber: 2,
     createdAt: Date.now(),
@@ -163,12 +199,14 @@ async function main(): Promise<void> {
   const queuedDelivery = nextEnvelope(tb2);
   await withTimeout(tb2.open(), 5000, "B re-auth");
   const queuedJson = await withTimeout(queuedDelivery, 5000, "queued envelope");
-  const opened2 = await openEnvelope(
-    envelopeFromJson(queuedJson),
-    await importPublicKey(aPub),
-    workspaceKey,
-    Date.now(),
-  );
+  const received2 = envelopeFromJson(queuedJson);
+  await verifyEnvelope(received2, await importPublicKey(aPub), Date.now());
+  const key2 = await ratchetDecrypt(sessionB, {
+    ratchetPublicKeyB64: received2.ratchetPublicKeyB64,
+    messageNumber: received2.messageNumber,
+    previousChainLength: received2.previousChainLength,
+  });
+  const opened2 = await decryptEnvelope(received2, key2);
   assert(
     new TextDecoder().decode(opened2) === JSON.stringify(message2),
     "queued payload should match",

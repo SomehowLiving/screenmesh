@@ -1,15 +1,15 @@
 import { fromBase64, toBase64 } from "@screenmesh/protocol";
-import { decrypt, encrypt } from "./encrypt.js";
 
 /**
- * Wrapping workspace keys for rotation (docs/Security.md §5): the owner
- * derives a pairwise AES key via X25519 ECDH with each remaining device
- * and encrypts the new workspace key under it. A revoked device holds the
- * OLD workspace keys but cannot derive anyone else's pairwise secret, so
- * rotated keys — and all traffic after rotation — stay out of its reach.
- *
- * TODO(hardening): run the shared secret through HKDF with a context
- * label instead of using it directly as the AES key.
+ * X25519 identity-key encode/decode helpers. Originally built for
+ * workspace-key rotation (wrapping a new symmetric key per device on
+ * revocation); that mechanism has been retired in favor of per-pair
+ * Double Ratchet sessions (packages/crypto/src/ratchet.ts), which give a
+ * strictly better guarantee — each pair's secrecy is independent, so
+ * revoking one device doesn't require rekeying the rest of the group.
+ * These export/import helpers are still used to move identity keys
+ * across the wire (presence, pairing) and to seed ratchet bootstrap.
+ * See docs/Security.md §5.
  */
 
 export async function exportEncryptionPublicKey(key: CryptoKey): Promise<string> {
@@ -21,55 +21,7 @@ export async function importEncryptionPublicKey(b64: string): Promise<CryptoKey>
   return crypto.subtle.importKey("raw", fromBase64(b64) as BufferSource, "X25519", true, []);
 }
 
-async function pairwiseAesKey(
-  myPrivate: CryptoKey,
-  theirPublic: CryptoKey,
-): Promise<CryptoKey> {
-  const sharedBits = await crypto.subtle.deriveBits(
-    { name: "X25519", public: theirPublic },
-    myPrivate,
-    256,
-  );
-  return crypto.subtle.importKey("raw", sharedBits, { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
-
-export interface WrappedKey {
-  nonceB64: string;
-  wrappedKeyB64: string;
-}
-
-export async function wrapKeyBytes(
-  myPrivate: CryptoKey,
-  theirPublic: CryptoKey,
-  keyBytes: Uint8Array,
-): Promise<WrappedKey> {
-  const aes = await pairwiseAesKey(myPrivate, theirPublic);
-  const { nonce, ciphertext } = await encrypt(aes, keyBytes);
-  return { nonceB64: toBase64(nonce), wrappedKeyB64: toBase64(ciphertext) };
-}
-
-export async function unwrapKeyBytes(
-  myPrivate: CryptoKey,
-  theirPublic: CryptoKey,
-  wrapped: WrappedKey,
-): Promise<Uint8Array> {
-  const aes = await pairwiseAesKey(myPrivate, theirPublic);
-  return decrypt(aes, {
-    nonce: fromBase64(wrapped.nonceB64),
-    ciphertext: fromBase64(wrapped.wrappedKeyB64),
-  });
-}
-
-export async function importRawWorkspaceKey(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", raw as BufferSource, { name: "AES-GCM" }, true, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
-
+/** Raw bytes of the pairing secret — fed into ratchet session bootstrap. */
 export async function exportRawWorkspaceKey(key: CryptoKey): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.exportKey("raw", key));
 }

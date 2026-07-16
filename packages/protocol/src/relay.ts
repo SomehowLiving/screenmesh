@@ -78,3 +78,9 @@ export interface RevokeDeviceRequest {
   ownerDeviceId: string;
   deviceId: string;
 }
+
+/** POST /workspaces/:id/capabilities — a device updates what it advertises. */
+export interface SetCapabilitiesRequest {
+  deviceId: string;
+  capabilities: string[];
+}

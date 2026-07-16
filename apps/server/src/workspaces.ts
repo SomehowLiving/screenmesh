@@ -4,6 +4,7 @@ import type {
   JoinWorkspaceRequest,
   RevokeDeviceRequest,
   RotatePairingRequest,
+  SetCapabilitiesRequest,
 } from "@screenmesh/protocol";
 import { isRegistryError, type WorkspaceRegistry } from "./registry.js";
 
@@ -67,6 +68,18 @@ export async function registerWorkspaceRoutes(
     const err = registry.removeDevice(id, body.ownerDeviceId, body.deviceId);
     if (err) return reply.code(err.code).send({ error: err.message });
     relay.disconnectDevice(body.deviceId);
+    broadcastPresence(id);
+    return reply.send({ ok: true });
+  });
+
+  app.post("/workspaces/:id/capabilities", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as SetCapabilitiesRequest;
+    if (!body?.deviceId || !Array.isArray(body.capabilities)) {
+      return reply.code(400).send({ error: "invalid request" });
+    }
+    const err = registry.setCapabilities(id, body.deviceId, body.capabilities);
+    if (err) return reply.code(err.code).send({ error: err.message });
     broadcastPresence(id);
     return reply.send({ ok: true });
   });

@@ -27,6 +27,19 @@ export interface YDocState {
 }
 
 /**
+ * Persisted Double Ratchet session state, one row per peer device (this
+ * device's workspace is implicit — one ScreenMeshDb per workspace
+ * membership). Loosely typed here to avoid a storage → crypto dependency
+ * (see docs/Architecture.md §6 package map); callers in packages/sync
+ * cast this to the precise `RatchetSession` shape from
+ * @screenmesh/crypto, which they already depend on.
+ */
+export interface PersistedRatchetSession {
+  peerDeviceId: string;
+  [key: string]: unknown;
+}
+
+/**
  * Local-first persistence (IndexedDB via Dexie). Every device stores its
  * own copy of the relevant workspace data; the server is never the primary
  * database. See docs/Architecture.md §2 (Layer 3).
@@ -44,6 +57,7 @@ export class ScreenMeshDb extends Dexie {
   settings!: Table<SettingEntry, string>;
   seen!: Table<SeenMessage, string>;
   ydocs!: Table<YDocState, string>;
+  ratchets!: Table<PersistedRatchetSession, string>;
 
   constructor(name = "screenmesh") {
     super(name);
@@ -62,6 +76,9 @@ export class ScreenMeshDb extends Dexie {
     });
     this.version(3).stores({
       ydocs: "objectId",
+    });
+    this.version(4).stores({
+      ratchets: "peerDeviceId",
     });
   }
 }

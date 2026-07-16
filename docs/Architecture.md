@@ -94,7 +94,7 @@ This layer decides *how* an encrypted operation reaches its destination:
    }
    ```
 
-   The carrier is never *shown* the payload by the app — but see docs/Security.md §6 for the honest caveat that today's shared workspace key means a carrier isn't cryptographically barred from it either. Closing that gap is a Phase 5 item, not a redesign: it reuses the X25519 wrapping already built for key rotation, applied per-message instead of per-epoch.
+   The carrier genuinely cannot decrypt the payload: each envelope is encrypted with a per-pair Double Ratchet message key (docs/Security.md §5), and the carrier was never part of the ratchet session between the original sender and the true destination.
 
 ### Layer 3 — Shared state
 
@@ -112,7 +112,7 @@ This layer decides *how* an encrypted operation reaches its destination:
 }
 ```
 
-Operation types: `CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `SEND_TO_DEVICE`, `MARK_DELIVERED`, `MARK_OPENED`, `PIN_OBJECT`, `MOVE_OBJECT`, `ADD_ATTACHMENT`, `REVOKE_DEVICE`. Devices exchange only the operations they are missing (delta sync keyed by per-device sequence numbers).
+Operation types: `CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `SEND_TO_DEVICE`, `MARK_DELIVERED`, `MARK_OPENED`, `REJECT_OBJECT`, `PIN_OBJECT`, `MOVE_OBJECT`, `ADD_ATTACHMENT`, `REVOKE_DEVICE`, `YJS_UPDATE`, `CONTINUE_ON_DEVICE`, `CARRY_BUNDLE`, `FILE_CHUNK`. Devices exchange only the operations they are missing (delta sync keyed by per-device sequence numbers).
 
 **CRDT merge.** Two devices may edit the same note while disconnected (phone edits the title, laptop edits the body). Rich object content is backed by **Yjs** documents so concurrent edits merge rather than overwrite; the operation log handles object lifecycle while Yjs handles intra-object content. State converges on every device once operations are exchanged.
 
@@ -133,9 +133,11 @@ carried        — encrypted bundles this device is carrying for others
 
 A React PWA (`apps/web`). Key surfaces:
 
-- **Device dashboard** — every paired device with online status, last seen, active transport, pending deliveries, and role (`input` / `editor` / `display` / `relay`).
-- **Device inbox** — received objects with actions: open, copy, save, forward, convert, delete, pin.
-- **Send-to-device selector** — one device, several, all, or *deliver when device returns*; per-send options like *expire after 1 hour*, *delete after opening*, *require confirmation*.
+- **Device dashboard** — every paired device with online status, last seen, active transport, pending deliveries, and this device's advertised capabilities (`terminal`, `filesystem`, `camera`, ...).
+- **Device inbox** — received objects with actions: open, copy, save, forward, convert, delete, pin, continue-on-device.
+- **Send-to-device selector** — one device, several, all, or *route to whichever device has a given capability* (`MeshEngine.resolveCapability`); per-send options like *expire after 1 hour*, *delete after opening*, *require confirmation*.
+- **Clipboard tunnel** — a one-click "share clipboard for N minutes" action; just an object with `expiresAt` + `deleteAfterOpening` set, so it rides the same expiry/delivery machinery as everything else.
+- **Secure file drop** — files above a size threshold are chunked into multiple small envelopes (`FILE_CHUNK`) rather than one giant one, each independently carry-eligible; the recipient materializes the object only once every chunk has arrived.
 - **Shared scratchpad** — a temporary board of cards (text, code, links, images, files, checklists) all connected devices contribute to.
 - **Pairing screen** — displays/scans the QR code, shows workspace expiry.
 - **Sync status** — always-visible local-first indicators: `Saved locally · 4 operations waiting to sync`.
@@ -153,6 +155,8 @@ interface Device {
   publicKey: string;
   type: "phone" | "laptop" | "tablet" | "display" | "desktop";
   role: "input" | "editor" | "display" | "relay";
+  /** Self-reported; drives capability routing. See docs/Security.md §6. */
+  capabilities?: string[];
   lastSeenAt: number;
   status: "online" | "offline";
   trusted: boolean;
@@ -253,12 +257,15 @@ Dependency rule: packages may only depend downward in this table. `protocol` has
 
 ## 7. Beyond the MVP: the device bus
 
-The notes/scratchpad interface is the first visible application. Underneath it, the layers above amount to **identity, pairing, encryption, discovery, transport negotiation, reliable delivery, offline queueing** — a secure, local-first communication fabric for a user's devices. Once that exists, the same channel can carry:
+The notes/scratchpad interface is the first visible application. Underneath it, the layers above amount to **identity, pairing, encryption, discovery, transport negotiation, reliable delivery, offline queueing** — a secure, local-first communication fabric for a user's devices. Three of these have shipped:
 
-- **Secure file drop** — files between trusted devices, no plaintext cloud hop.
-- **Temporary clipboard tunnel** — share the clipboard for five minutes, then erase it.
-- **Developer command channel** — send `pnpm run integration-test` from phone to laptop, executed only after explicit approval on the receiving device.
+- **Secure file drop** ✅ — files chunked across multiple small carry-eligible envelopes rather than one giant one, no plaintext cloud hop.
+- **Temporary clipboard tunnel** ✅ — share the clipboard for a few minutes, then erase it (built entirely on expiring objects + delete-after-opening).
+- **Capability routing** ✅ — devices advertise capabilities (phone: camera, GPS; laptop: terminal, filesystem, local models) via presence, and a send can target "whichever device has X" (`MeshEngine.resolveCapability`) instead of naming a specific device. Self-reported and unverified — see docs/Security.md §6.
+
+Still ahead:
+
+- **Developer command channel** — send `pnpm run integration-test` from phone to laptop, executed only after explicit approval on the receiving device. Needs a trusted local agent process (a browser tab can't spawn a shell) — see Roadmap.md Phase 5.
 - **Agent-to-agent tasks** — structured tasks routed between local AI agents on different devices.
-- **Capability routing** — devices expose selected capabilities (phone: camera, GPS; laptop: terminal, filesystem, local models) and ScreenMesh routes requests to the device that has them.
 
 That trajectory — from shared scratchpad to **secure personal device bus** — is what the architecture is shaped for. See [Roadmap.md](Roadmap.md).

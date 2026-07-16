@@ -312,7 +312,7 @@ export function InboxPanel(props: {
                           await markOpenedIfReceived(object);
                         }}
                       >
-                        Copy
+                        {object.type === "clipboard" ? "📋 Paste to my clipboard" : "Copy"}
                       </button>
                     )}
                     {object.type === "link" && text !== null && (

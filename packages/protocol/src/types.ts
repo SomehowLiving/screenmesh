@@ -3,6 +3,22 @@
 export type DeviceType = "phone" | "laptop" | "tablet" | "display" | "desktop";
 export type DeviceRole = "input" | "editor" | "display" | "relay";
 
+/**
+ * Capability routing (docs/Roadmap.md Phase 5): a device advertises what
+ * it can do, and a send can target "whichever device has this" instead of
+ * a specific device — e.g. "route this command to the terminal." Not a
+ * closed enum: devices may advertise anything, but these are the ones the
+ * UI has first-class pickers for.
+ */
+export type DeviceCapability =
+  | "terminal"
+  | "filesystem"
+  | "camera"
+  | "microphone"
+  | "gps"
+  | "browser"
+  | "local-models";
+
 export interface Device {
   id: string;
   name: string;
@@ -12,6 +28,8 @@ export interface Device {
   encryptionKey?: string;
   type: DeviceType;
   role: DeviceRole;
+  /** Capabilities this device advertises to the rest of the workspace. */
+  capabilities?: string[];
   lastSeenAt: number;
   status: "online" | "offline";
   trusted: boolean;
@@ -26,6 +44,7 @@ export interface DeviceInfo {
   /** Base64 X25519 public key for key-agreement (workspace key rotation). */
   encryptionKey?: string;
   type: DeviceType;
+  capabilities?: string[];
 }
 
 export type WorkspaceMode = "personal" | "temporary" | "shared";

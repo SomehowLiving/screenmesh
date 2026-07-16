@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   toBase64,
+  type DeviceCapability,
   type FileContent,
   type MeshObjectType,
   type SendOptions,
@@ -10,14 +11,38 @@ import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
 
-/** Envelopes travel as JSON over the relay — keep attachments small. */
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const CAPABILITY_CHOICES: DeviceCapability[] = [
+  "terminal",
+  "filesystem",
+  "camera",
+  "microphone",
+  "gps",
+  "browser",
+  "local-models",
+];
+
+/**
+ * Files above ~150 KB base64 travel as chunked envelopes (secure file
+ * drop, see MeshEngine.sendFileChunks) rather than one giant envelope, so
+ * the practical ceiling is generous — bounded here mainly to keep
+ * IndexedDB and browser memory use reasonable on the sending device.
+ */
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 const EXPIRY_CHOICES: Array<{ label: string; ms?: number }> = [
   { label: "Never expires" },
   { label: "Expires in 10 minutes", ms: 10 * 60 * 1000 },
   { label: "Expires in 1 hour", ms: 60 * 60 * 1000 },
   { label: "Expires in 24 hours", ms: 24 * 60 * 60 * 1000 },
+];
+
+/** Temporary clipboard tunnel (FUTURE.md): share what's on the clipboard
+ *  for a short, fixed window and have it erase itself automatically —
+ *  built entirely on the existing expiresAt + deleteAfterOpening options. */
+const CLIPBOARD_DURATIONS: Array<{ label: string; ms: number }> = [
+  { label: "1 minute", ms: 60 * 1000 },
+  { label: "5 minutes", ms: 5 * 60 * 1000 },
+  { label: "15 minutes", ms: 15 * 60 * 1000 },
 ];
 
 function detectType(text: string): MeshObjectType {
@@ -44,6 +69,8 @@ export function SendPanel(props: {
   const [requireConfirmation, setRequireConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [clipboardDuration, setClipboardDuration] = useState(1); // "5 minutes"
+  const [capability, setCapability] = useState<DeviceCapability>(CAPABILITY_CHOICES[0]!);
 
   const others =
     useLiveQuery(
@@ -67,9 +94,25 @@ export function SendPanel(props: {
     setSelected(allSelected ? new Set() : new Set(others.map((d) => d.id)));
   }
 
+  /** Capability routing: resolve "whichever device has X" to concrete
+   *  device(s) and add them to the normal recipient selection — online
+   *  matches first, so this prefers an immediate direct send. */
+  async function routeToCapability() {
+    const matches = await props.engine.resolveCapability(capability);
+    const best = matches[0]; // resolveCapability sorts online devices first
+    if (!best) {
+      setNote(`No paired device currently advertises "${capability}".`);
+      return;
+    }
+    setSelected((prev) => new Set([...prev, best.id]));
+    setNote(
+      `Routed to ${best.name} (advertising "${capability}")${best.status === "offline" ? " — offline, will queue" : ""}.`,
+    );
+  }
+
   async function attach(picked: File) {
     if (picked.size > MAX_FILE_BYTES) {
-      setNote(`File is too large (${formatSize(picked.size)}) — the limit is 5 MB for now.`);
+      setNote(`File is too large (${formatSize(picked.size)}) — the limit is 25 MB for now.`);
       return;
     }
     const bytes = new Uint8Array(await picked.arrayBuffer());
@@ -89,6 +132,34 @@ export function SendPanel(props: {
       ...(deleteAfterOpening ? { deleteAfterOpening: true } : {}),
       ...(requireConfirmation ? { requireConfirmation: true } : {}),
     };
+  }
+
+  async function shareClipboard() {
+    if (recipients.length === 0) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (!clip.trim()) {
+        setNote("Clipboard is empty.");
+        return;
+      }
+      const ms = CLIPBOARD_DURATIONS[clipboardDuration]?.ms ?? CLIPBOARD_DURATIONS[1]!.ms;
+      await props.engine.sendObject(
+        { type: "clipboard", content: { text: clip } },
+        recipients.map((d) => d.id),
+        { expiresAt: Date.now() + ms, deleteAfterOpening: true },
+      );
+      setNote(
+        `Clipboard shared with ${recipients.map((d) => d.name).join(", ")} — erases itself after ${CLIPBOARD_DURATIONS[clipboardDuration]?.label ?? "a few minutes"} or first paste.`,
+      );
+    } catch (err) {
+      setNote(
+        `Couldn't read the clipboard: ${err instanceof Error ? err.message : err}. Your browser may need permission — try again after granting clipboard access.`,
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function send() {
@@ -182,13 +253,47 @@ export function SendPanel(props: {
               e.target.value = "";
             }}
           />
-          <span className="badge">＋ attach image or file (up to 5 MB)</span>
+          <span className="badge">＋ attach image or file (up to 25 MB)</span>
         </label>
       )}
+      <div className="actions">
+        <button
+          className="ghost"
+          disabled={busy || recipients.length === 0}
+          onClick={() => void shareClipboard()}
+        >
+          📋 Share clipboard
+        </button>
+        <select
+          value={clipboardDuration}
+          onChange={(e) => setClipboardDuration(Number(e.target.value))}
+        >
+          {CLIPBOARD_DURATIONS.map((choice, i) => (
+            <option key={choice.label} value={i}>
+              for {choice.label}
+            </option>
+          ))}
+        </select>
+      </div>
       {others.length === 0 ? (
         <p className="muted">Pair another device to send things to it.</p>
       ) : (
         <div className="stack">
+          <div className="actions">
+            <select
+              value={capability}
+              onChange={(e) => setCapability(e.target.value as DeviceCapability)}
+            >
+              {CAPABILITY_CHOICES.map((cap) => (
+                <option key={cap} value={cap}>
+                  {cap}
+                </option>
+              ))}
+            </select>
+            <button className="ghost" onClick={() => void routeToCapability()}>
+              Route to device with this capability
+            </button>
+          </div>
           <label className="check">
             <input type="checkbox" checked={allSelected} onChange={toggleAll} />
             <strong>All devices</strong>

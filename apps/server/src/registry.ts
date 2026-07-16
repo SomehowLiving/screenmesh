@@ -161,6 +161,7 @@ export class WorkspaceRegistry {
       ...(device.encryptionKey !== undefined
         ? { encryptionKey: device.encryptionKey }
         : {}),
+      ...(device.capabilities !== undefined ? { capabilities: device.capabilities } : {}),
       type: device.type,
       online: isOnline(device.id),
       lastSeenAt: device.lastSeenAt,
@@ -170,5 +171,17 @@ export class WorkspaceRegistry {
   touch(workspaceId: string, deviceId: string, at: number): void {
     const device = this.workspaces.get(workspaceId)?.devices.get(deviceId);
     if (device) device.lastSeenAt = at;
+  }
+
+  /** A device updates what it advertises (e.g. "I now expose a terminal"). */
+  setCapabilities(
+    workspaceId: string,
+    deviceId: string,
+    capabilities: string[],
+  ): RegistryError | null {
+    const device = this.workspaces.get(workspaceId)?.devices.get(deviceId);
+    if (!device) return { code: 404, message: "device is not in this workspace" };
+    device.capabilities = capabilities;
+    return null;
   }
 }

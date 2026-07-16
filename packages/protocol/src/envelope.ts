@@ -4,6 +4,12 @@ import { fromBase64, toBase64 } from "./base64.js";
  * Every message on every transport is wrapped in a SecureEnvelope.
  * Encryption happens before the envelope reaches any transport; relays
  * and carrier devices only ever see ciphertext. See docs/Security.md §3.
+ *
+ * The payload key comes from a per-pair Double Ratchet session, not a
+ * shared workspace secret (see docs/Security.md §5 and
+ * packages/crypto/src/ratchet.ts) — `ratchetPublicKeyB64` /
+ * `messageNumber` / `previousChainLength` are exactly what the recipient
+ * needs to derive the matching message key.
  */
 export interface SecureEnvelope {
   version: number;
@@ -13,17 +19,21 @@ export interface SecureEnvelope {
   workspaceId: string;
   createdAt: number;
   expiresAt?: number;
-  /** Monotonic per-sender counter for replay protection. */
+  /** Monotonic per-sender counter; secondary to messageId dedup for replay protection. */
   sequenceNumber: number;
-  /** Which workspace-key generation encrypted this payload (0 = initial). */
-  keyEpoch: number;
+  /** Sender's current ratchet public key (base64 X25519). */
+  ratchetPublicKeyB64: string;
+  /** Position in the sending chain identified by ratchetPublicKeyB64. */
+  messageNumber: number;
+  /** Length of the sender's previous sending chain (lets the receiver drain it on a ratchet step). */
+  previousChainLength: number;
   /** AES-GCM nonce (12 bytes) prepended to the ciphertext. */
   ciphertext: Uint8Array;
   /** Ed25519 signature over the envelope fields + ciphertext. */
   signature: Uint8Array;
 }
 
-export const ENVELOPE_VERSION = 1;
+export const ENVELOPE_VERSION = 2;
 
 /** JSON wire form of a SecureEnvelope (binary fields as base64). */
 export interface EnvelopeJson {
@@ -35,7 +45,9 @@ export interface EnvelopeJson {
   createdAt: number;
   expiresAt?: number;
   sequenceNumber: number;
-  keyEpoch: number;
+  ratchetPublicKeyB64: string;
+  messageNumber: number;
+  previousChainLength: number;
   ciphertext: string;
   signature: string;
 }
@@ -50,7 +62,9 @@ export function envelopeToJson(env: SecureEnvelope): EnvelopeJson {
     createdAt: env.createdAt,
     ...(env.expiresAt !== undefined ? { expiresAt: env.expiresAt } : {}),
     sequenceNumber: env.sequenceNumber,
-    keyEpoch: env.keyEpoch,
+    ratchetPublicKeyB64: env.ratchetPublicKeyB64,
+    messageNumber: env.messageNumber,
+    previousChainLength: env.previousChainLength,
     ciphertext: toBase64(env.ciphertext),
     signature: toBase64(env.signature),
   };
@@ -66,7 +80,9 @@ export function envelopeFromJson(json: EnvelopeJson): SecureEnvelope {
     createdAt: json.createdAt,
     ...(json.expiresAt !== undefined ? { expiresAt: json.expiresAt } : {}),
     sequenceNumber: json.sequenceNumber,
-    keyEpoch: json.keyEpoch ?? 0,
+    ratchetPublicKeyB64: json.ratchetPublicKeyB64,
+    messageNumber: json.messageNumber,
+    previousChainLength: json.previousChainLength,
     ciphertext: fromBase64(json.ciphertext),
     signature: fromBase64(json.signature),
   };
@@ -74,8 +90,11 @@ export function envelopeFromJson(json: EnvelopeJson): SecureEnvelope {
 
 /**
  * Payload encoded into a pairing QR code / join link — the explicit trust
- * ceremony. The workspace key travels over this trusted visual channel
- * (MVP bootstrap), so relays never hold key material.
+ * ceremony. The QR-transported secret now serves as the ratchet
+ * bootstrap secret for every pairwise session in the workspace (see
+ * packages/crypto/src/ratchet.ts), not as a direct message-encryption
+ * key — a relay that substitutes identity keys in transit still can't
+ * derive a session's root key without it.
  *
  * Kept deliberately minimal so the QR stays low-density and easy to scan:
  * workspace name, roster, and owner identity all come from the join
@@ -83,7 +102,8 @@ export function envelopeFromJson(json: EnvelopeJson): SecureEnvelope {
  */
 export interface PairingPayload {
   workspaceId: string;
-  /** Base64 raw AES-256 workspace key, shared over the visual channel. */
+  /** Base64 raw secret, shared over the visual channel, seeding every
+   *  pairwise ratchet session in this workspace. */
   workspaceKey: string;
   /** Single-use, short-lived token authorizing this pairing. */
   pairingToken: string;

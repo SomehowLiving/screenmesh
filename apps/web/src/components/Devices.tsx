@@ -1,12 +1,24 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
+import type { DeviceCapability } from "@screenmesh/protocol";
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import {
   revokeDevice,
+  setCapabilities,
   type LocalIdentity,
   type LocalWorkspace,
 } from "../lib/app.js";
+
+const CAPABILITY_CHOICES: DeviceCapability[] = [
+  "terminal",
+  "filesystem",
+  "camera",
+  "microphone",
+  "gps",
+  "browser",
+  "local-models",
+];
 
 function lastSeen(at: number): string {
   const mins = Math.round((Date.now() - at) / 60_000);
@@ -21,6 +33,7 @@ export function DevicesPanel(props: {
   me: LocalIdentity;
   workspace: LocalWorkspace;
   engine: MeshEngine;
+  onIdentityChange: (me: LocalIdentity) => void;
 }) {
   const devices = useLiveQuery(() => props.db.devices.toArray(), [props.db]) ?? [];
   const carrying = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
@@ -38,6 +51,19 @@ export function DevicesPanel(props: {
       setNote(`${name} was removed.`);
     } catch (err) {
       setNote(`Could not remove device: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function toggleCapability(cap: DeviceCapability) {
+    const current = props.me.capabilities;
+    const next = current.includes(cap)
+      ? current.filter((c) => c !== cap)
+      : [...current, cap];
+    try {
+      const updated = await setCapabilities(props.db, props.me, props.workspace, next);
+      props.onIdentityChange(updated);
+    } catch (err) {
+      setNote(`Could not update capabilities: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -61,6 +87,11 @@ export function DevicesPanel(props: {
               {device.status === "online" ? "online" : lastSeen(device.lastSeenAt)}
             </span>
             <span className="badge">{device.type}</span>
+            {device.capabilities?.map((cap) => (
+              <span className="badge" key={cap}>
+                {cap}
+              </span>
+            ))}
             {isOwner && device.id !== props.me.deviceId && (
               <button
                 className="ghost"
@@ -72,6 +103,24 @@ export function DevicesPanel(props: {
           </li>
         ))}
       </ul>
+      <div className="stack">
+        <p className="muted">
+          This device's capabilities — lets others route a send to
+          "whichever device has X" instead of naming this device directly.
+        </p>
+        <div className="actions">
+          {CAPABILITY_CHOICES.map((cap) => (
+            <label className="check" key={cap}>
+              <input
+                type="checkbox"
+                checked={props.me.capabilities.includes(cap)}
+                onChange={() => void toggleCapability(cap)}
+              />
+              {cap}
+            </label>
+          ))}
+        </div>
+      </div>
       {carrying.length > 0 && (
         <p className="muted">
           Carrying {carrying.length} item{carrying.length === 1 ? "" : "s"} for{" "}
