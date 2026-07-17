@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Relay connectivity (WebSocket + pairing HTTP calls) — needed now. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      Nearby transports (docs/Android.md) are stubbed, not implemented, in
+      this pass — see transport/nearby/*.kt. These permissions are
+      declared now so the manifest doesn't need revisiting when those land:
+
+      BLE (API 31+ needs the new runtime-requestable BLUETOOTH_* permissions;
+      below API 31, BLUETOOTH/BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION are used
+      instead — an app targeting minSdk 26 needs both blocks):
+        <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+        <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+        <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+        <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+        <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+        <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+        <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+      Wi-Fi Direct (API 33+ additionally wants NEARBY_WIFI_DEVICES):
+        <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+        <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+        <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
+        <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+
+      NFC (tap-to-pair — read-only NDEF is enough for exchanging a pairing
+      code, no HCE needed):
+        <uses-permission android:name="android.permission.NFC" />
+        <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    -->
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.ScreenMesh"
+        android:usesCleartextTraffic="true">
+        <!--
+          usesCleartextTraffic: dev convenience only, matching the PWA's own
+          "self-signed HTTPS on the LAN" story — point RELAY_BASE_URL
+          (MeshEngine construction site) at a plain http:// dev relay while
+          testing locally. Remove for anything beyond local development.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

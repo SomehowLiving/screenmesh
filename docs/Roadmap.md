@@ -52,7 +52,8 @@ Known limitation at the time, resolved in Phase 5: this shipped when all workspa
 
 ## Phase 3 — Native nearby
 
-- Thin Android companion bridging Google Nearby Connections (Bluetooth/BLE/Wi-Fi) to the PWA
+- [~] **Android app scaffolded** (`apps/android`): a hand-ported Kotlin core of `packages/protocol`/`crypto`/`transport` (BouncyCastle for Ed25519/X25519/HKDF, OkHttp for the relay WebSocket + pairing HTTP) plus a reduced `MeshEngine` and a bare reference UI, so the phone joins the same workspaces and speaks the same envelope/ratchet protocol as the web PWA and desktop agent — see docs/Android.md for exactly what's ported vs. deferred (no local persistence, no Yjs, no store-carry-forward, no file chunking yet). **Not built or run** — this environment has no JDK/Android SDK/Gradle/device, so nothing beyond careful line-by-line porting against the TS source was possible here.
+- [ ] Bluetooth LE / Wi-Fi Direct / NFC pairing and transport — stubbed as throwing interfaces in `apps/android`'s `transport/nearby/`, not implemented; needs real hardware to build against
 - Wi-Fi Aware as an optional high-throughput adapter
 - NFC tap-to-pair via passive tags on shared displays
 
