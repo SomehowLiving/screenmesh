@@ -6,32 +6,41 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!--
-      Nearby transports (docs/Android.md) are stubbed, not implemented, in
-      this pass — see transport/nearby/*.kt. These permissions are
-      declared now so the manifest doesn't need revisiting when those land:
-
-      BLE (API 31+ needs the new runtime-requestable BLUETOOTH_* permissions;
-      below API 31, BLUETOOTH/BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION are used
-      instead — an app targeting minSdk 26 needs both blocks):
-        <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-        <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-        <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
-        <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-        <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-        <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-        <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-
-      Wi-Fi Direct (API 33+ additionally wants NEARBY_WIFI_DEVICES):
-        <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-        <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-        <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
-        <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
-
-      NFC (tap-to-pair — read-only NDEF is enough for exchanging a pairing
-      code, no HCE needed):
-        <uses-permission android:name="android.permission.NFC" />
-        <uses-feature android:name="android.hardware.nfc" android:required="false" />
+      Nearby transports (docs/Android.md) — real implementations in
+      transport/nearby/*.kt, but still UNTESTED (no device/hardware in the
+      environment they were written in). Runtime permission REQUESTS
+      (as opposed to these manifest declarations) are the caller's
+      responsibility — see each transport class's doc comment.
     -->
+
+    <!-- BLE (API 31+ needs the new runtime-requestable BLUETOOTH_* permissions;
+         below API 31, BLUETOOTH/BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION are used
+         instead — an app targeting minSdk 26 needs both blocks). Our BLE scan
+         filters by service UUID only, never used to derive location, hence
+         "neverForLocation" on BLUETOOTH_SCAN. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <!-- Wi-Fi Direct (API 33+ additionally wants NEARBY_WIFI_DEVICES, also
+         never used to derive location). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+
+    <!-- Below API 33, both BLE (API 31-32 without the neverForLocation grant
+         path on some OEM skins) and Wi-Fi Direct peer discovery still want
+         this — see BleTransport.kt / WifiDirectTransport.kt. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+
+    <!-- NFC (tap-to-pair — read-only/write NDEF is enough for exchanging a
+         pairing code, no HCE needed). -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -46,10 +55,19 @@
         -->
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Tapping a ScreenMesh pairing tag launches straight into
+                 MainActivity even when the app wasn't already running; see
+                 NfcPairing.kt (MIME_TYPE must match exactly). -->
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.screenmesh.pairing" />
             </intent-filter>
         </activity>
     </application>

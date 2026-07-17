@@ -1,28 +1,215 @@
 package com.screenmesh.transport.nearby
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pDevice
+import android.net.wifi.p2p.WifiP2pManager
+import android.util.Log
+import com.screenmesh.transport.Connection
+import com.screenmesh.transport.MeshTransport
+import com.screenmesh.transport.Peer
+import com.screenmesh.transport.TransportKind
+import com.screenmesh.transport.TransportStatus
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
+private const val TAG = "WifiDirectTransport"
+private const val PORT = 8988
+
 /**
- * STUB — Wi-Fi Direct pairing/transport. Deferred per the "protocol/crypto
- * port first" scoping decision: needs WifiP2pManager + a real device pair
- * to build and test. Not wired into MeshTransport yet — every method
- * throws.
+ * Real (not stubbed) Wi-Fi Direct transport: discovers peers via
+ * WifiP2pManager, negotiates a group on connect, then carries
+ * length-prefixed SecureEnvelope JSON bytes over a plain TCP socket
+ * between the group owner and the client — no MTU concerns here, unlike
+ * BLE, since it's an ordinary socket once the group forms.
  *
- * Plan for when real hardware is available (see docs/Android.md):
- *  - Discovery via WifiP2pManager.discoverPeers, group negotiation via
- *    connect(WifiP2pConfig).
- *  - Once a group forms, open a plain TCP socket between the group owner
- *    and client and carry SecureEnvelope JSON bytes over it — the crypto
- *    layer doesn't care which transport moved the bytes.
- *  - Permissions: ACCESS_WIFI_STATE, CHANGE_WIFI_STATE,
- *    NEARBY_WIFI_DEVICES (API 33+) or ACCESS_FINE_LOCATION (below it). See
- *    the commented block in AndroidManifest.xml.
+ * The OS delivers group-formation progress via broadcasts
+ * (`WIFI_P2P_PEERS_CHANGED_ACTION`, `WIFI_P2P_CONNECTION_CHANGED_ACTION`),
+ * which are inherently Activity/lifecycle-bound — this class exposes
+ * `refreshPeers()` and `onGroupOwnerAddressKnown()` for the hosting
+ * Activity's `BroadcastReceiver` to call, rather than registering its own
+ * receiver (this class has no Activity to tie that registration's
+ * lifecycle to).
+ *
+ * UNTESTED: written against the documented android.net.wifi.p2p APIs
+ * with no device pair available in this environment to run it on. See
+ * docs/Android.md. Requires ACCESS_WIFI_STATE/CHANGE_WIFI_STATE and
+ * (API < 33) ACCESS_FINE_LOCATION, or (API 33+) NEARBY_WIFI_DEVICES,
+ * requested by the caller before start() — this class does not request
+ * permissions itself.
  */
-class WifiDirectTransport {
-    fun discover(): Nothing =
-        throw NotImplementedError("Wi-Fi Direct transport not yet implemented — needs a real Android device")
+@SuppressLint("MissingPermission") // caller is responsible for requesting Wi-Fi Direct permissions first
+class WifiDirectTransport(private val context: Context) : MeshTransport {
+    override val kind: TransportKind = TransportKind.NEARBY
 
-    fun connect(): Nothing =
-        throw NotImplementedError("Wi-Fi Direct transport not yet implemented — needs a real Android device")
+    private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+    private var channel: WifiP2pManager.Channel? = null
+    private var serverSocket: ServerSocket? = null
+    private val executor: ExecutorService = Executors.newCachedThreadPool()
+    private val sockets = CopyOnWriteArrayList<Socket>()
+    private val discoveredPeers = CopyOnWriteArrayList<WifiP2pDevice>()
 
-    fun send(data: ByteArray): Nothing =
-        throw NotImplementedError("Wi-Fi Direct transport not yet implemented — needs a real Android device")
+    private val messageHandlers = CopyOnWriteArrayList<(ByteArray) -> Unit>()
+    private val statusHandlers = CopyOnWriteArrayList<(TransportStatus) -> Unit>()
+
+    private var status: TransportStatus = TransportStatus.IDLE
+        set(value) {
+            if (field == value) return
+            field = value
+            statusHandlers.forEach { it(value) }
+        }
+
+    private val peerListListener = WifiP2pManager.PeerListListener { peers ->
+        discoveredPeers.clear()
+        discoveredPeers.addAll(peers.deviceList)
+    }
+
+    fun start() {
+        val ch = manager.initialize(context, context.mainLooper, null)
+        if (ch == null) {
+            Log.w(TAG, "Wi-Fi Direct is not supported on this device")
+            return
+        }
+        channel = ch
+        status = TransportStatus.DISCOVERING
+        manager.discoverPeers(
+            ch,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = Unit
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "Wi-Fi Direct discovery failed: $reason")
+                }
+            },
+        )
+        // Listen as a server too, in case a peer connects to us as group owner.
+        startServerSocket()
+    }
+
+    fun stop() {
+        channel?.let { manager.stopPeerDiscovery(it, null) }
+        sockets.forEach { runCatching { it.close() } }
+        sockets.clear()
+        runCatching { serverSocket?.close() }
+        serverSocket = null
+        status = TransportStatus.IDLE
+    }
+
+    /** Call from the hosting Activity's WIFI_P2P_PEERS_CHANGED_ACTION receiver. */
+    fun refreshPeers() {
+        channel?.let { manager.requestPeers(it, peerListListener) }
+    }
+
+    fun connectToPeer(device: WifiP2pDevice) {
+        val config = WifiP2pConfig().apply { deviceAddress = device.deviceAddress }
+        val ch = channel ?: return
+        manager.connect(
+            ch,
+            config,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = Unit
+                override fun onFailure(reason: Int) {
+                    Log.w(TAG, "Wi-Fi Direct connect to ${device.deviceAddress} failed: $reason")
+                }
+            },
+        )
+    }
+
+    /**
+     * Call once the hosting Activity's WIFI_P2P_CONNECTION_CHANGED_ACTION
+     * receiver resolves a connected group with a known group-owner address
+     * (via `manager.requestConnectionInfo`) — opens the client-side socket
+     * to it. The group-owner side is handled by startServerSocket's accept
+     * loop instead; only the non-owner side calls this.
+     */
+    fun onGroupOwnerAddressKnown(groupOwnerAddress: String) {
+        executor.execute {
+            try {
+                val socket = Socket()
+                socket.connect(InetSocketAddress(groupOwnerAddress, PORT), 10_000)
+                registerSocket(socket)
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to connect to group owner $groupOwnerAddress", e)
+            }
+        }
+    }
+
+    private fun startServerSocket() {
+        executor.execute {
+            try {
+                val server = ServerSocket(PORT)
+                serverSocket = server
+                while (!server.isClosed) {
+                    val socket = server.accept()
+                    registerSocket(socket)
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Wi-Fi Direct server socket stopped", e)
+            }
+        }
+    }
+
+    private fun registerSocket(socket: Socket) {
+        sockets.add(socket)
+        status = TransportStatus.CONNECTED
+        executor.execute {
+            try {
+                val input = DataInputStream(socket.getInputStream())
+                while (!socket.isClosed) {
+                    val length = input.readInt()
+                    val bytes = ByteArray(length)
+                    input.readFully(bytes)
+                    messageHandlers.forEach { it(bytes) }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Wi-Fi Direct peer disconnected", e)
+            } finally {
+                sockets.remove(socket)
+                runCatching { socket.close() }
+            }
+        }
+    }
+
+    // --- MeshTransport ---
+
+    override fun discover(): List<Peer> = discoveredPeers.map {
+        Peer(deviceId = it.deviceAddress, name = it.deviceName, transport = kind)
+    }
+
+    override fun connect(peer: Peer): Connection {
+        discoveredPeers.find { it.deviceAddress == peer.deviceId }?.let { connectToPeer(it) }
+        return Connection(peer) {}
+    }
+
+    /** Broadcasts to every connected socket — see BleTransport's send() doc comment for why. */
+    override fun send(data: ByteArray) {
+        val dead = mutableListOf<Socket>()
+        for (socket in sockets) {
+            try {
+                val output = DataOutputStream(socket.getOutputStream())
+                output.writeInt(data.size)
+                output.write(data)
+                output.flush()
+            } catch (e: Exception) {
+                dead.add(socket)
+            }
+        }
+        sockets.removeAll(dead)
+    }
+
+    override fun disconnect() = stop()
+
+    override fun onMessage(handler: (ByteArray) -> Unit) {
+        messageHandlers.add(handler)
+    }
+
+    override fun onStatusChange(handler: (TransportStatus) -> Unit) {
+        statusHandlers.add(handler)
+    }
 }

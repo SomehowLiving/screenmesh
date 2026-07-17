@@ -50,7 +50,11 @@ below.
 | Pairing codec | `crypto/Pairing.kt` | `packages/crypto/src/pairing.ts` |
 | Transport interface | `transport/MeshTransport.kt` | `packages/transport/src/transport.ts` |
 | Relay WebSocket client | `transport/RelayTransport.kt` | `packages/transport/src/websocket.ts` |
+| BLE transport (real, unwired) | `transport/nearby/BleTransport.kt` | (new — no TS equivalent exists) |
+| Wi-Fi Direct transport (real, unwired) | `transport/nearby/WifiDirectTransport.kt` | (new — no TS equivalent exists) |
+| NFC pairing helper (real, unwired) | `transport/nearby/NfcPairing.kt` | (new — no TS equivalent exists) |
 | Pairing HTTP client | `sync/PairingClient.kt` | `apps/agent/src/join.ts` + `apps/server/src/workspaces.ts` |
+| Identity/session persistence | `sync/LocalState.kt` | `packages/crypto/src/persist.ts` + `apps/agent/src/state.ts` |
 | Sync engine (reduced — see below) | `sync/MeshEngine.kt` | `packages/sync/src/engine.ts` |
 | Reference UI | `MainActivity.kt` + `res/layout/activity_main.xml` | (new; not a port) |
 
@@ -92,10 +96,19 @@ six op types: `CREATE_OBJECT`, `SEND_TO_DEVICE`, `MARK_DELIVERED`,
 **Explicitly NOT ported this pass** (unimplemented ops are silently
 ignored, matching the TS engine's `default: break` — not a bug, a scope
 line):
-- **Persistence.** Everything lives in `ConcurrentHashMap`s. There is no
-  Android storage layer (`packages/storage`'s Dexie/IndexedDB has no
-  equivalent here yet — a Room database would be the natural fit).
-  Restarting the app loses every object, delivery, and ratchet session.
+- **Object/delivery/ratchet-session persistence.** `MeshEngine` itself
+  still keeps everything in `ConcurrentHashMap`s — there is no Android
+  storage layer (`packages/storage`'s Dexie/IndexedDB has no equivalent
+  here yet; a Room database would be the natural fit). Restarting the app
+  loses every object, delivery, and in-memory ratchet session (which then
+  re-bootstraps from identity + pairing secret on the first message,
+  exactly as the ratchet design intends — see docs/Security.md §5).
+  `sync/LocalState.kt` persists a NARROWER thing: just the device identity
+  and session metadata (workspaceId, serverUrl, the pairing secret) via
+  `SharedPreferences`, so relaunching the app reconnects to the relay
+  without needing a fresh pairing code — mirroring exactly what
+  `apps/agent/src/state.ts` persists for the desktop agent, and for the
+  same reason.
 - **Store-carry-forward** (`packages/sync/src/engine.ts`'s outbox/carried
   tables, `periodicSweep`, `CARRY_BUNDLE`). An undeliverable send is
   dropped, not queued — there's no outbox to drain on reconnect.
@@ -106,14 +119,56 @@ line):
 - **`UPDATE_OBJECT`, `DELETE_OBJECT`, `PIN_OBJECT`, `MOVE_OBJECT`,
   `ADD_ATTACHMENT`.**
 
-### Nearby transports: stubbed, not implemented
+### Nearby transports: implemented, still unwired into MainActivity
 
 `transport/nearby/{BleTransport,WifiDirectTransport,NfcPairing}.kt` are
-interface-shaped stubs — every method throws `NotImplementedError`. Each
-file's doc comment sketches the intended design (GATT service for BLE,
-`WifiP2pManager` + a TCP socket for Wi-Fi Direct, NDEF-carried pairing
-code for NFC) for whoever picks this up with a real device in hand. None
-of the three are wired into `MeshTransport` yet.
+now real implementations, not stubs:
+
+- **`BleTransport`** implements `MeshTransport` fully: this device is
+  simultaneously a GATT peripheral (advertises a ScreenMesh service +
+  characteristic) and a GATT central (scans for and connects to the same
+  service on other phones). Each SecureEnvelope JSON blob is framed with
+  a 4-byte length header and reassembled on the other end; messages
+  larger than one negotiated MTU (~517 bytes after `requestMtu`) are NOT
+  fragmented across multiple writes — fine for pairing codes and short
+  text objects, not bulk transfer.
+- **`WifiDirectTransport`** implements `MeshTransport` fully: discovers
+  peers via `WifiP2pManager`, and once a group forms, carries
+  length-prefixed envelope bytes over a plain TCP socket between the
+  group owner and the client. No MTU concerns here — it's a normal
+  socket.
+- **`NfcPairing`** is a set of pure helper functions (not a
+  `MeshTransport` — NFC is pairing-only, far too low-bandwidth for
+  envelope traffic), matching docs/Roadmap.md Phase 3's "NFC tap-to-pair
+  via passive tags" design rather than the deprecated phone-to-phone
+  Android Beam: write a pairing code onto a blank/rewritable NDEF tag,
+  read it back on tap. `MainActivity` doesn't call these yet (see below).
+
+**What's still missing before these are usable from the app:**
+- **Runtime permission requests.** The manifest declares everything
+  needed (`BLUETOOTH_SCAN`/`ADVERTISE`/`CONNECT`, `NEARBY_WIFI_DEVICES`,
+  `ACCESS_FINE_LOCATION` below API 33, `NFC`), but Android's runtime
+  permission dialogs (`ActivityResultContracts.RequestMultiplePermissions`)
+  are not wired into `MainActivity` — each transport's doc comment says
+  so explicitly ("caller is responsible for requesting permissions
+  first").
+- **`MainActivity` doesn't instantiate or call any of the three.** It
+  only uses `RelayTransport`. Wiring a nearby transport in means: request
+  permissions, construct the transport, register the
+  `WifiP2pManager`/NFC `BroadcastReceiver`s (`WifiDirectTransport` and
+  `NfcPairing` both expose the hooks a hosting Activity needs —
+  `refreshPeers()`/`onGroupOwnerAddressKnown()` and
+  `enableForegroundDispatch()`/`disableForegroundDispatch()` respectively
+  — but don't register the receivers themselves), and decide how a
+  nearby-discovered peer maps to a `MeshEngine` ratchet session (today
+  `MeshEngine` only knows relay-learned `deviceId`s from presence; a BLE
+  MAC address or Wi-Fi Direct device address isn't one of those without
+  an explicit pairing handshake over the nearby channel first).
+- This last point is the real remaining design gap, not just missing
+  glue code: pairing over BLE/Wi-Fi Direct/NFC needs its own bootstrap
+  (something has to carry a `PairingPayload` over the nearby channel the
+  way the QR code does today) before a nearby-discovered peer can join a
+  `MeshEngine` session at all.
 
 ## Setup (once you have Android Studio)
 
@@ -134,6 +189,11 @@ of the three are wired into `MeshTransport` yet.
    paste it into the Android app, tap **Join workspace**.
 5. Send a text object from either side and confirm it shows up on the
    other.
+6. Relaunching the app should reconnect automatically (it persists
+   identity + session — see `sync/LocalState.kt`) without needing a new
+   pairing code, since a pairing token is single-use. **Forget device**
+   clears that saved state locally (it does not revoke the device
+   server-side — use the web app's revoke action for that).
 
 ## Verification status
 

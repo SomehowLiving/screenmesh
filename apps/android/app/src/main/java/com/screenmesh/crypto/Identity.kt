@@ -87,3 +87,16 @@ fun exportEncryptionPublicKey(key: X25519PublicKeyParameters): String = toBase64
 
 fun importEncryptionPublicKey(base64: String): X25519PublicKeyParameters =
     X25519PublicKeyParameters(fromBase64(base64), 0)
+
+/**
+ * PKCS8 DER, base64 — mirrors packages/crypto/src/keywrap.ts's
+ * exportEncryptionPrivateKey/importEncryptionPrivateKey (X25519 is RFC
+ * 8410 PKCS8 too, same as Ed25519 above). Requires an extractable key,
+ * which every BC key-parameter object effectively is — see the module
+ * doc comment.
+ */
+fun exportEncryptionPrivateKey(key: X25519PrivateKeyParameters): String =
+    toBase64(PrivateKeyInfoFactory.createPrivateKeyInfo(key).encoded)
+
+fun importEncryptionPrivateKey(base64: String): X25519PrivateKeyParameters =
+    PrivateKeyFactory.createKey(fromBase64(base64)) as X25519PrivateKeyParameters
