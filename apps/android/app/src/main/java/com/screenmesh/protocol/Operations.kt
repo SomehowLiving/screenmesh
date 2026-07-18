@@ -60,11 +60,11 @@ data class YjsUpdatePayload(val objectId: String, val updateB64: String)
 @Serializable
 data class UpdateObjectPayload(val objectId: String, val content: JsonElement, val updatedAt: Long)
 
-/** NOT yet applied by MeshEngine.kt. */
+/** Applied by MeshEngine.kt's continueOnDevice / CONTINUE_ON_DEVICE case. */
 @Serializable
 data class ContinueOnDevicePayload(val objectId: String)
 
-/** Store–carry–forward hand-off — NOT yet applied by MeshEngine.kt. */
+/** Store–carry–forward hand-off — applied by MeshEngine.kt's CARRY_BUNDLE case. */
 @Serializable
 data class CarryBundlePayload(
     val bundleId: String,

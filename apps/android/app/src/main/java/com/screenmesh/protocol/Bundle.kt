@@ -6,8 +6,8 @@ package com.screenmesh.protocol
  * outbox. Any trusted device may carry it toward the destination without
  * being able to read it. See docs/Architecture.md §2.
  *
- * NOT yet applied by MeshEngine.kt in this pass — carried here so the
- * wire-format model is complete even before the carry logic is ported.
+ * Applied by MeshEngine.kt's `carried` map / `attemptCarriedDelivery` —
+ * see its module doc comment.
  */
 data class DeliveryBundle(
     val bundleId: String,

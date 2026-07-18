@@ -88,36 +88,39 @@ Kotlin version is a **reduced** port, not a full one:
 
 **Implemented:** identity-backed pairwise ratchet sessions (get-or-create
 per peer), `sendObject` (CREATE_OBJECT + SEND_TO_DEVICE), `markOpened` /
-`acceptObject` / `rejectObject`, `revokeDevice`, `resolveCapability`,
-presence sync, and the verify → ratchet-decrypt → apply receive path for
-six op types: `CREATE_OBJECT`, `SEND_TO_DEVICE`, `MARK_DELIVERED`,
-`MARK_OPENED`, `REJECT_OBJECT`, `REVOKE_DEVICE`.
+`acceptObject` / `rejectObject`, `updateObjectContent` (plain
+last-write-wins, no Yjs), `continueOnDevice`, `revokeDevice`,
+`resolveCapability`, presence sync, **store-carry-forward** (in-memory
+outbox/carried maps, a reentrancy-guarded `periodicSweep` on a
+`ScheduledExecutorService`, `CARRY_BUNDLE` handling, hop-limited carrier
+offers), and the verify → ratchet-decrypt → apply receive path for
+`CREATE_OBJECT`, `UPDATE_OBJECT`, `DELETE_OBJECT`, `CONTINUE_ON_DEVICE`,
+`SEND_TO_DEVICE`, `MARK_DELIVERED`, `MARK_OPENED`, `REJECT_OBJECT`,
+`CARRY_BUNDLE`, `REVOKE_DEVICE`.
 
-**Explicitly NOT ported this pass** (unimplemented ops are silently
-ignored, matching the TS engine's `default: break` — not a bug, a scope
-line):
-- **Object/delivery/ratchet-session persistence.** `MeshEngine` itself
-  still keeps everything in `ConcurrentHashMap`s — there is no Android
-  storage layer (`packages/storage`'s Dexie/IndexedDB has no equivalent
-  here yet; a Room database would be the natural fit). Restarting the app
-  loses every object, delivery, and in-memory ratchet session (which then
-  re-bootstraps from identity + pairing secret on the first message,
-  exactly as the ratchet design intends — see docs/Security.md §5).
-  `sync/LocalState.kt` persists a NARROWER thing: just the device identity
-  and session metadata (workspaceId, serverUrl, the pairing secret) via
-  `SharedPreferences`, so relaunching the app reconnects to the relay
-  without needing a fresh pairing code — mirroring exactly what
-  `apps/agent/src/state.ts` persists for the desktop agent, and for the
-  same reason.
-- **Store-carry-forward** (`packages/sync/src/engine.ts`'s outbox/carried
-  tables, `periodicSweep`, `CARRY_BUNDLE`). An undeliverable send is
-  dropped, not queued — there's no outbox to drain on reconnect.
-- **Yjs collaborative text editing** (`YJS_UPDATE`, `editText`). No Yjs
-  port exists for Kotlin.
+**Object/delivery/ratchet-session persistence** is still in-memory only
+(`ConcurrentHashMap`s) — there is no Android storage layer
+(`packages/storage`'s Dexie/IndexedDB has no equivalent here; a Room
+database would be the natural fit). Restarting the app loses every
+object, delivery, and in-memory ratchet session (a lost ratchet session
+just re-bootstraps from identity + pairing secret on the first message,
+exactly as the ratchet design intends — docs/Security.md §5). This is
+**not a regression versus the desktop agent** — `apps/agent` keeps the
+exact same scope for the exact same reason (see its `state.ts` doc
+comment); only identity + session survive a restart on either platform.
+`sync/LocalState.kt` is what persists that narrower thing on Android.
+
+**Explicitly NOT ported** (unimplemented ops are silently ignored,
+matching the TS engine's `default: break` — a scope line, not a bug):
+- **Yjs collaborative text editing** (`YJS_UPDATE`, `editText`). No
+  Yjs-for-Kotlin port exists; would need either a JVM CRDT library or a
+  from-scratch wire-compatible Yjs update decoder — a large undertaking
+  on its own, not attempted here.
 - **Secure file drop chunking** (`FILE_CHUNK`, `sendFileChunks`).
-- **`continueOnDevice` / `CONTINUE_ON_DEVICE`.**
-- **`UPDATE_OBJECT`, `DELETE_OBJECT`, `PIN_OBJECT`, `MOVE_OBJECT`,
-  `ADD_ATTACHMENT`.**
+- **`PIN_OBJECT`, `MOVE_OBJECT`, `ADD_ATTACHMENT`** — these have no
+  sender-side method in the TS engine either (reserved for a future UI
+  action there too), so there's nothing to port yet beyond the
+  already-complete wire type in `Operations.kt`.
 
 ### Nearby transports: implemented, still unwired into MainActivity
 
