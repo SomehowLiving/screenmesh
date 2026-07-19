@@ -23,7 +23,11 @@ import com.screenmesh.protocol.DeliveryStatuses
 import com.screenmesh.protocol.Device
 import com.screenmesh.protocol.DeviceTypes
 import com.screenmesh.protocol.EnvelopeJson
+import com.screenmesh.protocol.FileChunkMeta
+import com.screenmesh.protocol.FileChunkPayload
+import com.screenmesh.protocol.FileContent
 import com.screenmesh.protocol.MeshObject
+import com.screenmesh.protocol.MeshObjectTypes
 import com.screenmesh.protocol.ObjectRefPayload
 import com.screenmesh.protocol.Operation
 import com.screenmesh.protocol.OperationTypes
@@ -56,6 +60,14 @@ private const val SEEN_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 private const val DEFAULT_SWEEP_INTERVAL_MS = 15_000L
 
 /**
+ * Secure file drop: files whose base64 payload exceeds this many
+ * characters (~150 KB raw) are split into chunks, each its own envelope
+ * (own ratchet message, own carry-eligibility), rather than one giant
+ * envelope. Keeps individual messages small regardless of file size.
+ */
+private const val FILE_CHUNK_SIZE_B64 = 200_000
+
+/**
  * Kotlin mirror of packages/sync/src/engine.ts's MeshEngine — the layer
  * tying protocol/crypto/transport together: UI action -> op -> encrypt ->
  * transport, and the reverse on receive: verify -> decrypt -> apply.
@@ -72,20 +84,24 @@ private const val DEFAULT_SWEEP_INTERVAL_MS = 15_000L
  * restart, via `LocalState.kt`.
  *
  * Implemented this pass: identity-backed pairwise ratchet sessions,
- * `sendObject` (CREATE_OBJECT + SEND_TO_DEVICE), `markOpened` /
+ * `sendObject` (CREATE_OBJECT + SEND_TO_DEVICE, or chunked `FILE_CHUNK`
+ * sends for large files/images — see `sendFileChunks`), `markOpened` /
  * `acceptObject` / `rejectObject`, `updateObjectContent`,
  * `continueOnDevice`, `revokeDevice`, `resolveCapability`, presence sync,
  * store-carry-forward (outbox/carried maps, `periodicSweep`,
  * `CARRY_BUNDLE`), and the verify -> ratchet-decrypt -> apply receive path
  * for CREATE_OBJECT, SEND_TO_DEVICE, UPDATE_OBJECT, DELETE_OBJECT,
  * CONTINUE_ON_DEVICE, MARK_DELIVERED, MARK_OPENED, REJECT_OBJECT,
- * CARRY_BUNDLE, and REVOKE_DEVICE.
+ * FILE_CHUNK, CARRY_BUNDLE, and REVOKE_DEVICE.
  *
- * Explicitly NOT ported this pass (unimplemented ops are silently
- * ignored, matching the TS engine's `default: break` — a scope line, not
- * a bug): Yjs collaborative text editing (`YJS_UPDATE`, `editText` — no
- * Yjs-for-Kotlin port exists) and secure file drop chunking
- * (`FILE_CHUNK`, `sendFileChunks`). See docs/Android.md.
+ * Explicitly NOT ported (unimplemented ops are silently ignored, matching
+ * the TS engine's `default: break` — a scope line, not a bug): Yjs
+ * collaborative text editing (`YJS_UPDATE`, `editText`) — no
+ * Yjs-for-Kotlin port exists, and the realistic options (yrs' JVM/Kotlin
+ * bindings via JNI/JNA) need a Rust + Android NDK cross-compilation
+ * toolchain this pass didn't set up; a from-scratch reimplementation of
+ * Yjs's binary update format and YATA merge algorithm is a large,
+ * easy-to-get-subtly-wrong undertaking on its own. See docs/Android.md.
  */
 
 /** A newly-arrived hand-off request — mirrors the TS engine's `settings["focusObject"]` write. */
@@ -93,6 +109,13 @@ data class FocusRequest(val objectId: String, val fromDeviceId: String, val at: 
 
 @Serializable
 private data class OpsEnvelope(val ops: List<Operation>)
+
+/** Reassembly state for one in-progress FILE_CHUNK transfer. */
+private class IncomingFileChunks(val total: Int) {
+    val chunks = ConcurrentHashMap<Int, String>()
+
+    @Volatile var meta: FileChunkMeta? = null
+}
 
 /** Store-carry-forward: our own not-yet-delivered sends, waiting for the recipient or a carrier. */
 private data class OutboxEntry(
@@ -146,6 +169,10 @@ class MeshEngine(private val cfg: EngineConfig) {
     /** Bundles we're carrying toward their true destination on someone else's behalf. */
     private val carried = ConcurrentHashMap<String, DeliveryBundle>()
 
+    /** In-progress file reassembly buffers, keyed by fileId (in-memory only — a
+     *  reload mid-transfer loses partial progress and needs a re-send). */
+    private val incomingChunks = ConcurrentHashMap<String, IncomingFileChunks>()
+
     private val sweeping = AtomicBoolean(false)
     private var sweepExecutor: ScheduledExecutorService? = null
 
@@ -197,6 +224,19 @@ class MeshEngine(private val cfg: EngineConfig) {
         )
         objects[obj.id] = obj
 
+        // Secure file drop: large files travel as a sequence of small chunk
+        // envelopes instead of one giant one (see FILE_CHUNK_SIZE_B64).
+        val fileContent = if (type == MeshObjectTypes.FILE || type == MeshObjectTypes.IMAGE) {
+            try {
+                Json.decodeFromJsonElement(FileContent.serializer(), content)
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val chunked = fileContent != null && fileContent.dataB64.length > FILE_CHUNK_SIZE_B64
+
         for (recipientId in recipientIds) {
             val delivery = Delivery(
                 id = UUID.randomUUID().toString(),
@@ -209,27 +249,73 @@ class MeshEngine(private val cfg: EngineConfig) {
             )
             deliveries[delivery.id] = delivery
 
-            val ops = listOf(
-                makeOp(
-                    OperationTypes.CREATE_OBJECT,
-                    obj.id,
-                    Json.encodeToJsonElement(CreateObjectPayload.serializer(), CreateObjectPayload(obj)),
-                ),
-                makeOp(
-                    OperationTypes.SEND_TO_DEVICE,
-                    obj.id,
-                    Json.encodeToJsonElement(SendToDevicePayload.serializer(), SendToDevicePayload(obj.id, options)),
-                ),
-            )
             // Real object deliveries are carry-eligible: if this recipient is
             // unreachable directly, another online device may later carry the
             // encrypted bundle on our behalf (docs/Architecture.md §2).
-            val sentLive = sendOps(recipientId, ops, DEFAULT_HOP_LIMIT)
+            val sentLive = if (chunked && fileContent != null) {
+                sendFileChunks(obj, fileContent, recipientId, options)
+            } else {
+                val ops = listOf(
+                    makeOp(
+                        OperationTypes.CREATE_OBJECT,
+                        obj.id,
+                        Json.encodeToJsonElement(CreateObjectPayload.serializer(), CreateObjectPayload(obj)),
+                    ),
+                    makeOp(
+                        OperationTypes.SEND_TO_DEVICE,
+                        obj.id,
+                        Json.encodeToJsonElement(SendToDevicePayload.serializer(), SendToDevicePayload(obj.id, options)),
+                    ),
+                )
+                sendOps(recipientId, ops, DEFAULT_HOP_LIMIT)
+            }
             if (sentLive) {
                 deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.SENDING)
             }
         }
         return obj
+    }
+
+    /**
+     * Send a large file as a sequence of small chunk envelopes; each chunk
+     * is its own carry-eligible envelope. Returns true only if every chunk
+     * went out live (matching sendOps' live/queued return contract).
+     */
+    private fun sendFileChunks(obj: MeshObject, file: FileContent, recipientId: String, options: SendOptions): Boolean {
+        val totalChunks = (file.dataB64.length + FILE_CHUNK_SIZE_B64 - 1) / FILE_CHUNK_SIZE_B64
+        var allLive = true
+        for (i in 0 until totalChunks) {
+            val start = i * FILE_CHUNK_SIZE_B64
+            val end = minOf(start + FILE_CHUNK_SIZE_B64, file.dataB64.length)
+            val meta = if (i == 0) {
+                FileChunkMeta(
+                    objectType = obj.type,
+                    name = file.name,
+                    mimeType = file.mimeType,
+                    size = file.size,
+                    createdBy = obj.createdBy,
+                    createdAt = obj.createdAt,
+                    expiresAt = obj.expiresAt,
+                    options = if (!options.isEmpty) options else null,
+                )
+            } else {
+                null
+            }
+            val payload = FileChunkPayload(
+                fileId = obj.id,
+                chunkIndex = i,
+                totalChunks = totalChunks,
+                dataB64 = file.dataB64.substring(start, end),
+                meta = meta,
+            )
+            val sentLive = sendOps(
+                recipientId,
+                listOf(makeOp(OperationTypes.FILE_CHUNK, obj.id, Json.encodeToJsonElement(FileChunkPayload.serializer(), payload))),
+                DEFAULT_HOP_LIMIT,
+            )
+            if (!sentLive) allLive = false
+        }
+        return allLive
     }
 
     /**
@@ -679,6 +765,37 @@ class MeshEngine(private val cfg: EngineConfig) {
                 }
                 if (delivery != null) {
                     deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.REJECTED)
+                }
+            }
+            OperationTypes.FILE_CHUNK -> {
+                val payload = Json.decodeFromJsonElement(FileChunkPayload.serializer(), op.payload)
+                val entry = incomingChunks.getOrPut(payload.fileId) { IncomingFileChunks(payload.totalChunks) }
+                entry.chunks[payload.chunkIndex] = payload.dataB64
+                if (payload.meta != null) entry.meta = payload.meta
+
+                val meta = entry.meta
+                if (meta != null && entry.chunks.size == entry.total) {
+                    val dataB64 = StringBuilder()
+                    for (i in 0 until entry.total) dataB64.append(entry.chunks[i] ?: "")
+                    val fileObject = MeshObject(
+                        id = payload.fileId,
+                        workspaceId = op.workspaceId,
+                        type = meta.objectType,
+                        content = Json.encodeToJsonElement(
+                            FileContent.serializer(),
+                            FileContent(name = meta.name, mimeType = meta.mimeType, size = meta.size, dataB64 = dataB64.toString()),
+                        ),
+                        createdBy = meta.createdBy,
+                        createdAt = meta.createdAt,
+                        updatedAt = meta.createdAt,
+                        expiresAt = meta.expiresAt,
+                    )
+                    if (!objects.containsKey(fileObject.id)) {
+                        objects[fileObject.id] = fileObject
+                        newObject = fileObject
+                    }
+                    incomingChunks.remove(payload.fileId)
+                    recordIncomingDelivery(senderId, fileObject.id, meta.options, nowMs)
                 }
             }
             OperationTypes.CARRY_BUNDLE -> {

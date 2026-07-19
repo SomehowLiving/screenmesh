@@ -7,6 +7,7 @@ import com.screenmesh.protocol.DeviceInfo
 import com.screenmesh.protocol.DeviceTypes
 import com.screenmesh.protocol.JoinWorkspaceRequest
 import com.screenmesh.protocol.JoinWorkspaceResponse
+import com.screenmesh.protocol.RotatePairingRequest
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -53,5 +54,37 @@ fun joinWorkspaceHttp(
         }
         val text = response.body?.string() ?: throw Exception("empty join response")
         return Json.decodeFromString(JoinWorkspaceResponse.serializer(), text)
+    }
+}
+
+/**
+ * Kotlin mirror of the pairing-token half of the desktop web app's own
+ * invite flow (POST /workspaces/:id/pairing-token — owner-only; the
+ * server rejects this unless `callerDeviceId` matches the workspace's
+ * ownerDeviceId). Used by the "advertise via BLE" nearby-pairing flow in
+ * MainActivity: mint a fresh single-use token server-side, then serve the
+ * resulting pairing code over BleTransport.localPairingCode so a nearby
+ * scanner can read and redeem it via [joinWorkspaceHttp] exactly like a
+ * QR/NFC code.
+ */
+fun rotatePairingTokenHttp(
+    serverUrl: String,
+    workspaceId: String,
+    callerDeviceId: String,
+    pairingToken: String,
+    tokenExpiresAt: Long,
+) {
+    val body = Json.encodeToString(
+        RotatePairingRequest.serializer(),
+        RotatePairingRequest(deviceId = callerDeviceId, pairingToken = pairingToken, tokenExpiresAt = tokenExpiresAt),
+    )
+    val request = Request.Builder()
+        .url("$serverUrl/workspaces/$workspaceId/pairing-token")
+        .post(body.toRequestBody(JSON_MEDIA_TYPE))
+        .build()
+    httpClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) {
+            throw Exception("POST ${request.url} -> ${response.code} ${response.body?.string()}")
+        }
     }
 }

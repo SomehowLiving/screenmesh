@@ -29,6 +29,7 @@ import com.screenmesh.transport.TransportKind
 import com.screenmesh.transport.TransportStatus
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -38,6 +39,13 @@ private const val TAG = "BleTransport"
 /** ScreenMesh's GATT service — one characteristic carries chunked SecureEnvelope JSON bytes. */
 private val SERVICE_UUID: UUID = UUID.fromString("5c7d0d9e-6b0a-4f7d-9c1a-2b6e4f8a3d10")
 private val ENVELOPE_CHARACTERISTIC_UUID: UUID = UUID.fromString("5c7d0d9e-6b0a-4f7d-9c1a-2b6e4f8a3d11")
+
+/**
+ * Read-only: whatever pairing code (the same "SM1.…" string a QR/NFC tag
+ * would carry) this device currently offers to nearby scanners, if any.
+ * This is the nearby pairing bootstrap — see the module doc comment.
+ */
+private val PAIRING_CHARACTERISTIC_UUID: UUID = UUID.fromString("5c7d0d9e-6b0a-4f7d-9c1a-2b6e4f8a3d12")
 
 /** Standard Bluetooth SIG Client Characteristic Configuration Descriptor UUID. */
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -59,6 +67,17 @@ private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b3
  * docs/Android.md; this transport is meant for nearby pairing and small
  * handoffs, matching docs/Roadmap.md Phase 3's "nearby pairing only"
  * framing, not bulk transfer).
+ *
+ * Nearby pairing bootstrap (docs/Android.md): rather than invent a new
+ * trust protocol for BLE, this reuses the EXACT SAME pairing-code string
+ * ("SM1.…") that a QR code or NFC tap already carries — the pairing
+ * characteristic above just serves that string over an extra read-only
+ * GATT characteristic on the same service. A scanning device reads it,
+ * then runs the ordinary decodePairingPayload + joinWorkspaceHttp flow
+ * exactly as if it had scanned a QR. This is deliberately the smallest
+ * possible addition: BLE only ever moves the same string every other
+ * pairing channel moves, so none of the actual trust/crypto logic is
+ * new or BLE-specific.
  *
  * UNTESTED: written against the documented android.bluetooth/.le APIs
  * with no device available in this environment to run it on. See
@@ -85,11 +104,28 @@ class BleTransport(private val context: Context) : MeshTransport {
     private val connectedPeripherals = ConcurrentHashMap<String, BluetoothGatt>()
     private val discoveredPeers = ConcurrentHashMap<String, BluetoothDevice>()
 
+    /** Addresses with a connectGatt() in flight or completed — see connectToPeripheral. */
+    private val connectingAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     /** In-progress reassembly buffers, keyed by remote device address. */
     private val incoming = ConcurrentHashMap<String, Reassembly>()
 
+    /** Pending one-shot pairing-code reads, keyed by remote device address. */
+    private val pairingCodeRequests = ConcurrentHashMap<String, (String?) -> Unit>()
+
     private val messageHandlers = CopyOnWriteArrayList<(ByteArray) -> Unit>()
     private val statusHandlers = CopyOnWriteArrayList<(TransportStatus) -> Unit>()
+
+    /**
+     * The pairing code (same format a QR/NFC tag would carry) this device
+     * currently offers to nearby scanners via [PAIRING_CHARACTERISTIC_UUID],
+     * or null to offer nothing. Set this when the local device has minted
+     * a fresh invite (see MainActivity's "Advertise via BLE" flow).
+     */
+    @Volatile var localPairingCode: String? = null
+
+    /** Fired once per newly-discovered nearby ScreenMesh peer (central role). */
+    @Volatile var onPeerDiscovered: ((Peer) -> Unit)? = null
 
     private var status: TransportStatus = TransportStatus.IDLE
         set(value) {
@@ -123,6 +159,7 @@ class BleTransport(private val context: Context) : MeshTransport {
         connectedPeripherals.clear()
         connectedCentrals.clear()
         discoveredPeers.clear()
+        connectingAddresses.clear()
         incoming.clear()
         status = TransportStatus.IDLE
     }
@@ -141,6 +178,13 @@ class BleTransport(private val context: Context) : MeshTransport {
         characteristic.addDescriptor(cccd)
         service.addCharacteristic(characteristic)
 
+        val pairingCharacteristic = BluetoothGattCharacteristic(
+            PAIRING_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ,
+        )
+        service.addCharacteristic(pairingCharacteristic)
+
         val callback = object : BluetoothGattServerCallback() {
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
                 when (newState) {
@@ -150,6 +194,21 @@ class BleTransport(private val context: Context) : MeshTransport {
                         incoming.remove(device.address)
                     }
                 }
+            }
+
+            override fun onCharacteristicReadRequest(
+                device: BluetoothDevice,
+                requestId: Int,
+                offset: Int,
+                characteristic: BluetoothGattCharacteristic,
+            ) {
+                if (characteristic.uuid != PAIRING_CHARACTERISTIC_UUID) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
+                    return
+                }
+                val bytes = (localPairingCode ?: "").toByteArray(StandardCharsets.UTF_8)
+                val value = if (offset <= bytes.size) bytes.copyOfRange(offset, bytes.size) else ByteArray(0)
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
 
             override fun onCharacteristicWriteRequest(
@@ -224,6 +283,7 @@ class BleTransport(private val context: Context) : MeshTransport {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 val device = result.device
                 if (discoveredPeers.putIfAbsent(device.address, device) == null) {
+                    onPeerDiscovered?.invoke(Peer(deviceId = device.address, name = device.name ?: device.address, transport = kind))
                     connectToPeripheral(device)
                 }
             }
@@ -236,7 +296,15 @@ class BleTransport(private val context: Context) : MeshTransport {
         scanCallback = callback
     }
 
+    /**
+     * Idempotent: [onPeerDiscovered] (fired from the scan callback below)
+     * and [requestPairingCode] can both race to connect to the same
+     * newly-discovered device — [connectingAddresses] makes a second call
+     * for an address already connecting/connected a no-op instead of
+     * opening a second, leaked `BluetoothGatt` client.
+     */
     private fun connectToPeripheral(device: BluetoothDevice) {
+        if (!connectingAddresses.add(device.address)) return
         device.connectGatt(
             context,
             false,
@@ -247,6 +315,7 @@ class BleTransport(private val context: Context) : MeshTransport {
                         BluetoothProfile.STATE_DISCONNECTED -> {
                             connectedPeripherals.remove(device.address)
                             incoming.remove(device.address)
+                            connectingAddresses.remove(device.address)
                             gatt.close()
                         }
                     }
@@ -258,14 +327,25 @@ class BleTransport(private val context: Context) : MeshTransport {
 
                 override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                     connectedPeripherals[device.address] = gatt
-                    val characteristic = gatt.getService(SERVICE_UUID)
-                        ?.getCharacteristic(ENVELOPE_CHARACTERISTIC_UUID)
-                        ?: return
-                    gatt.setCharacteristicNotification(characteristic, true)
-                    val cccd = characteristic.getDescriptor(CCCD_UUID)
-                    if (cccd != null) {
-                        cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(cccd)
+                    val service = gatt.getService(SERVICE_UUID) ?: return
+
+                    val characteristic = service.getCharacteristic(ENVELOPE_CHARACTERISTIC_UUID)
+                    if (characteristic != null) {
+                        gatt.setCharacteristicNotification(characteristic, true)
+                        val cccd = characteristic.getDescriptor(CCCD_UUID)
+                        if (cccd != null) {
+                            cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            gatt.writeDescriptor(cccd)
+                        }
+                    }
+
+                    if (pairingCodeRequests.containsKey(device.address)) {
+                        val pairingCharacteristic = service.getCharacteristic(PAIRING_CHARACTERISTIC_UUID)
+                        if (pairingCharacteristic != null) {
+                            gatt.readCharacteristic(pairingCharacteristic)
+                        } else {
+                            pairingCodeRequests.remove(device.address)?.invoke(null)
+                        }
                     }
                 }
 
@@ -274,8 +354,51 @@ class BleTransport(private val context: Context) : MeshTransport {
                         handleChunk(device.address, characteristic.value ?: return)
                     }
                 }
+
+                override fun onCharacteristicRead(
+                    gatt: BluetoothGatt,
+                    characteristic: BluetoothGattCharacteristic,
+                    status: Int,
+                ) {
+                    if (characteristic.uuid != PAIRING_CHARACTERISTIC_UUID) return
+                    val callback = pairingCodeRequests.remove(device.address) ?: return
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        val code = String(characteristic.value ?: ByteArray(0), StandardCharsets.UTF_8)
+                        callback(code.ifEmpty { null })
+                    } else {
+                        callback(null)
+                    }
+                }
             },
         )
+    }
+
+    /**
+     * One-shot: connect to a nearby ScreenMesh peripheral (found via
+     * [discover] or [onPeerDiscovered]) and read whatever pairing code
+     * it's currently offering — null if it's offering none, or if the
+     * peer is no longer reachable. This is the nearby pairing bootstrap:
+     * the caller feeds a non-null result straight into the same
+     * decodePairingPayload + joinWorkspaceHttp flow used for QR/NFC
+     * pairing codes.
+     */
+    fun requestPairingCode(peer: Peer, onResult: (String?) -> Unit) {
+        val device = discoveredPeers[peer.deviceId]
+        if (device == null) {
+            onResult(null)
+            return
+        }
+        pairingCodeRequests[device.address] = onResult
+        val existingGatt = connectedPeripherals[device.address]
+        val existingService = existingGatt?.getService(SERVICE_UUID)
+        if (existingGatt != null && existingService != null) {
+            val pairingCharacteristic = existingService.getCharacteristic(PAIRING_CHARACTERISTIC_UUID)
+            if (pairingCharacteristic != null) {
+                existingGatt.readCharacteristic(pairingCharacteristic)
+                return
+            }
+        }
+        connectToPeripheral(device)
     }
 
     private fun handleChunk(fromAddress: String, chunk: ByteArray) {

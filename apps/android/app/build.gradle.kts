@@ -40,6 +40,12 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
+    // registerForActivityResult / ActivityResultContracts (BLE runtime
+    // permission requests in MainActivity). appcompat 1.7.0 already pulls
+    // in a compatible androidx.activity transitively; pinned explicitly
+    // here so the version isn't left to transitive resolution.
+    implementation("androidx.activity:activity-ktx:1.9.0")
+
     // Relay client (WebSocket + HTTP pairing calls) — same role as
     // WebSocketRelayTransport (packages/transport) and the fetch() calls
     // in apps/web/src/lib/app.ts / apps/agent/src/join.ts.

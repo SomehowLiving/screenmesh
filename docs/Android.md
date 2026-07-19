@@ -21,20 +21,24 @@ mirror of `packages/x/src/y.ts`" doc comment pointing at its source of
 truth for exactly this reason — if the TS side changes, grep for that
 comment to find what else needs updating.
 
-## Scope of this pass: protocol/crypto port first
+## Scope: protocol/crypto port first, then a real toolchain
 
-Building and testing a real Android app needs a JDK, the Android SDK,
-Gradle, and (for anything beyond a compile check) a device or emulator.
-**None of that tooling is available in the environment this was written
-in** — no `java`, no `gradlew`/`gradle`, no `adb`, no `$ANDROID_HOME`. That
-was surfaced up front, and the explicit scope chosen in response was:
-write the pure-Kotlin core that has no Android-API dependency (data
-model, envelope sealing/verification, the Double Ratchet, the relay
-WebSocket + pairing HTTP client), and stub Bluetooth LE / Wi-Fi Direct /
-NFC behind interfaces, since those need real hardware to build and test
-regardless of what tooling this environment had. **Nothing in
-`apps/android` has been compiled or run.** See "Verification status"
-below.
+Building a real Android app needs a JDK, the Android SDK, and Gradle —
+**none of that was available when this module was started** (no `java`,
+no `gradlew`/`gradle`, no `adb`, no `$ANDROID_HOME`). The scope chosen in
+response was to write the pure-Kotlin core with no Android-API dependency
+first (data model, envelope sealing/verification, the Double Ratchet,
+the relay WebSocket + pairing HTTP client), reviewed-by-eye against the
+TypeScript source rather than compiled.
+
+**That tooling gap has since been closed.** A JDK (Temurin 17), the
+Android SDK (platform 34, build-tools 34.0.0, platform-tools), and
+Gradle were installed directly in this environment, and the project now
+has a committed Gradle wrapper (`gradlew`/`gradlew.bat`) so anyone else
+can build it the same way without a manual toolchain install. `gradlew
+compileDebugKotlin`, `gradlew assembleDebug`, and `gradlew lintDebug` all
+pass — see "Verification status" for exactly what that does and doesn't
+prove.
 
 ## What's implemented
 
@@ -113,19 +117,40 @@ comment); only identity + session survive a restart on either platform.
 **Explicitly NOT ported** (unimplemented ops are silently ignored,
 matching the TS engine's `default: break` — a scope line, not a bug):
 - **Yjs collaborative text editing** (`YJS_UPDATE`, `editText`). No
-  Yjs-for-Kotlin port exists; would need either a JVM CRDT library or a
-  from-scratch wire-compatible Yjs update decoder — a large undertaking
-  on its own, not attempted here.
-- **Secure file drop chunking** (`FILE_CHUNK`, `sendFileChunks`).
+  Yjs-for-Kotlin port exists. Investigated before deferring: the Yjs
+  project itself only points at [y-crdt/ykt](https://github.com/y-crdt/ykt)
+  (Kotlin bindings for `yrs`, the Rust port of Yjs) and community JNA
+  bindings — both require compiling a native Rust library and cross
+  -compiling it for every Android ABI via the NDK, which is a whole
+  additional toolchain (`rustc`, `cargo`, `cargo-ndk`) this pass didn't
+  set up, on top of everything else. A from-scratch reimplementation of
+  Yjs's binary update format and YATA merge algorithm was also considered
+  and rejected as too large and too easy to get subtly, silently
+  incompatible without a way to round-trip test against real Yjs. Net
+  effect: Android can create/receive/last-write-wins-update editable
+  objects (`text`/`code`/`link`) same as anything else, it just doesn't
+  merge concurrent edits via CRDT — a `YJS_UPDATE` from a TS peer editing
+  collaboratively is silently ignored, so Android's copy of that object
+  can drift from what TS peers see until the next `UPDATE_OBJECT`/
+  `CREATE_OBJECT`.
 - **`PIN_OBJECT`, `MOVE_OBJECT`, `ADD_ATTACHMENT`** — these have no
   sender-side method in the TS engine either (reserved for a future UI
   action there too), so there's nothing to port yet beyond the
   already-complete wire type in `Operations.kt`.
 
-### Nearby transports: implemented, still unwired into MainActivity
+**Secure file drop chunking** (`FILE_CHUNK`, `sendFileChunks`) IS
+implemented: `sendObject` detects a `file`/`image` object whose
+`dataB64` exceeds `FILE_CHUNK_SIZE_B64` (200,000 chars ≈ 150 KB raw) and
+splits it into a sequence of small `FILE_CHUNK` envelopes instead of one
+giant one, each independently carry-eligible; the receive path
+reassembles via an in-memory `incomingChunks` map (also not persisted —
+a reload mid-transfer loses partial progress and needs a re-send, same
+as the TS engine).
+
+### Nearby transports and the BLE pairing bootstrap
 
 `transport/nearby/{BleTransport,WifiDirectTransport,NfcPairing}.kt` are
-now real implementations, not stubs:
+real implementations, not stubs:
 
 - **`BleTransport`** implements `MeshTransport` fully: this device is
   simultaneously a GATT peripheral (advertises a ScreenMesh service +
@@ -139,41 +164,49 @@ now real implementations, not stubs:
   peers via `WifiP2pManager`, and once a group forms, carries
   length-prefixed envelope bytes over a plain TCP socket between the
   group owner and the client. No MTU concerns here — it's a normal
-  socket.
+  socket. **Not wired into `MainActivity`** — the `WifiP2pManager`
+  `BroadcastReceiver` (`WIFI_P2P_PEERS_CHANGED_ACTION`/
+  `WIFI_P2P_CONNECTION_CHANGED_ACTION`) that would drive
+  `refreshPeers()`/`onGroupOwnerAddressKnown()` doesn't exist yet.
 - **`NfcPairing`** is a set of pure helper functions (not a
   `MeshTransport` — NFC is pairing-only, far too low-bandwidth for
   envelope traffic), matching docs/Roadmap.md Phase 3's "NFC tap-to-pair
   via passive tags" design rather than the deprecated phone-to-phone
   Android Beam: write a pairing code onto a blank/rewritable NDEF tag,
-  read it back on tap. `MainActivity` doesn't call these yet (see below).
+  read it back on tap. **Not wired into `MainActivity`** — its
+  `enableForegroundDispatch()`/`disableForegroundDispatch()` need
+  `onResume`/`onPause` hooks that don't exist yet.
 
-**What's still missing before these are usable from the app:**
-- **Runtime permission requests.** The manifest declares everything
-  needed (`BLUETOOTH_SCAN`/`ADVERTISE`/`CONNECT`, `NEARBY_WIFI_DEVICES`,
-  `ACCESS_FINE_LOCATION` below API 33, `NFC`), but Android's runtime
-  permission dialogs (`ActivityResultContracts.RequestMultiplePermissions`)
-  are not wired into `MainActivity` — each transport's doc comment says
-  so explicitly ("caller is responsible for requesting permissions
-  first").
-- **`MainActivity` doesn't instantiate or call any of the three.** It
-  only uses `RelayTransport`. Wiring a nearby transport in means: request
-  permissions, construct the transport, register the
-  `WifiP2pManager`/NFC `BroadcastReceiver`s (`WifiDirectTransport` and
-  `NfcPairing` both expose the hooks a hosting Activity needs —
-  `refreshPeers()`/`onGroupOwnerAddressKnown()` and
-  `enableForegroundDispatch()`/`disableForegroundDispatch()` respectively
-  — but don't register the receivers themselves), and decide how a
-  nearby-discovered peer maps to a `MeshEngine` ratchet session (today
-  `MeshEngine` only knows relay-learned `deviceId`s from presence; a BLE
-  MAC address or Wi-Fi Direct device address isn't one of those without
-  an explicit pairing handshake over the nearby channel first).
-- This last point is the real remaining design gap, not just missing
-  glue code: pairing over BLE/Wi-Fi Direct/NFC needs its own bootstrap
-  (something has to carry a `PairingPayload` over the nearby channel the
-  way the QR code does today) before a nearby-discovered peer can join a
-  `MeshEngine` session at all.
+**BLE nearby pairing bootstrap — wired into `MainActivity`.** Rather than
+invent a new trust protocol for BLE, `BleTransport` serves an extra
+read-only GATT characteristic (`localPairingCode`) carrying the EXACT
+SAME "SM1.…" string a QR code or NFC tag already carries. `MainActivity`
+now has two buttons exercising this end to end:
+- **Scan nearby**: requests BLE runtime permissions if needed, starts
+  `BleTransport`, and on the first nearby ScreenMesh peer found, reads
+  its pairing characteristic and pre-fills the pairing-code field —
+  exactly as if that code had been scanned from a QR.
+- **Advertise via BLE**: mints a fresh single-use pairing token via a new
+  `rotatePairingTokenHttp` call (owner-only, mirrors the web app's own
+  invite action — POST `/workspaces/:id/pairing-token`), builds and
+  encodes a `PairingPayload` with it, and offers the resulting code over
+  BLE for 5 minutes.
 
-## Setup (once you have Android Studio)
+None of the actual trust/crypto logic is new here — BLE only ever moves
+the same string every other pairing channel moves, then falls through to
+the ordinary `decodePairingPayload` + `joinWorkspaceHttp` flow. A review
+pass caught a real race in the first version of this: `onPeerDiscovered`
+and `requestPairingCode` could both call `connectToPeripheral` for the
+same newly-found device, opening two concurrent GATT connections:
+`connectToPeripheral` is now idempotent per device address
+(`connectingAddresses`), fixed before this landed.
+
+## Setup
+
+The project has a committed Gradle wrapper, so a command-line build needs
+only a JDK 17+ and the Android SDK (`ANDROID_HOME`/`local.properties`
+pointing at it): `./gradlew assembleDebug` from `apps/android`. For actual
+day-to-day development:
 
 1. Open `apps/android` in Android Studio (Giraffe+ recommended); it should
    prompt to install any missing SDK platform/build-tools for
@@ -200,20 +233,48 @@ now real implementations, not stubs:
 
 ## Verification status
 
-**Nothing in `apps/android` has been compiled, type-checked, or run.**
-This environment has no JDK, no Android SDK, no Gradle, no `adb`, and no
-emulator or device — confirmed via `java -version`, `which gradle`,
-`which adb`, `which kotlinc`, and checking `$ANDROID_HOME`/
-`$ANDROID_SDK_ROOT`, all before starting this port. Every other layer of
-ScreenMesh in this repo (`packages/*`, `apps/web`, `apps/server`,
-`apps/agent`) has been verified by actually running it — `pnpm -r
-typecheck`, real builds, and smoke tests against a live relay. That
-verification discipline could not be applied here, and this file exists
-partly to say so plainly rather than let a "Phase 3 done" claim imply
-otherwise. Treat every Kotlin file in `apps/android` as reviewed-by-eye
-against its TS source, not as tested. The most likely class of latent bug
-is a wire-format mismatch (base64 padding, a canonical-signing-bytes field
-order slip, an HKDF info string typo) that would only surface the first
-time a real phone and a real browser try to talk to each other — that
-first real run against a live relay is the next thing to do, ideally
-before relying on this for anything real.
+**What IS now verified, with a real toolchain (Temurin JDK 17, Android
+SDK platform 34 + build-tools 34.0.0, Gradle 8.7):**
+- `./gradlew compileDebugKotlin` — the entire Kotlin module compiles
+  clean (only pre-existing, accepted deprecation warnings on the legacy
+  BLE GATT read/write overloads — see `BleTransport.kt`'s doc comment).
+- `./gradlew assembleDebug` — produces a real, installable
+  `app-debug.apk` (~9.7 MB).
+- `./gradlew lintDebug` — passes (only cosmetic warnings expected of a
+  bare reference UI: hardcoded strings instead of `strings.xml`
+  resources, a missing launcher icon, missing autofill hints — no
+  correctness issues).
+- The Gradle wrapper itself was exercised standalone (`./gradlew.bat
+  compileDebugKotlin` with nothing but `JAVA_HOME` and `ANDROID_HOME`
+  set) and reproduced the same result, confirming the build doesn't
+  secretly depend on some other piece of this machine's setup.
+
+This verification pass had real teeth — it caught two genuine bugs no
+amount of reading would have: a Kotlin visibility error
+(`RatchetSession.skippedKeys` was `internal` but exposed a
+`private`-in-file `SkippedKey` type — Ratchet.kt — fixed by making
+`SkippedKey` `internal` instead of widening the property, since
+`skippedKeys` is read from top-level functions in the same file that a
+class-`private` property can't reach), and an Android lint error
+(`ACCESS_FINE_LOCATION` declared without the now-mandatory
+`ACCESS_COARSE_LOCATION` alongside it on API 31+ — `CoarseFineLocation`
+— fixed in `AndroidManifest.xml`).
+
+**What is still NOT verified — no device or emulator exists in this
+environment:**
+- The app has never actually **run**. Compiling and lint-checking prove
+  the Kotlin/manifest/resource shapes are internally consistent; they
+  prove nothing about runtime behavior.
+- **Cross-language wire compatibility is still unconfirmed.** The
+  single biggest risk named throughout this doc — a subtly wrong base64
+  alphabet, a reordered signed-bytes field, an HKDF info-string typo —
+  would compile and lint clean and still silently fail the moment a real
+  Android phone and a real browser try to talk to each other over a live
+  relay. That first real interop run is still the next thing to do
+  before relying on this for anything real.
+- The BLE/Wi-Fi Direct/NFC code has never touched real Bluetooth/Wi-Fi
+  Direct/NFC radios — compiling against the Android SDK's API surface
+  confirms the calls are *shaped* correctly, not that the runtime
+  behavior (GATT callback timing, MTU negotiation, characteristic
+  read/write races) is correct.
+- No unit or instrumented tests exist for this module.

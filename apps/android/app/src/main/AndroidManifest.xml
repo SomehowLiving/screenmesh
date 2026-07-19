@@ -34,8 +34,12 @@
 
     <!-- Below API 33, both BLE (API 31-32 without the neverForLocation grant
          path on some OEM skins) and Wi-Fi Direct peer discovery still want
-         this — see BleTransport.kt / WifiDirectTransport.kt. -->
+         this — see BleTransport.kt / WifiDirectTransport.kt. Android 12+
+         requires ACCESS_COARSE_LOCATION to be declared alongside FINE
+         (lint: CoarseFineLocation) even though this app only ever
+         requests FINE at runtime. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="32" />
 
     <!-- NFC (tap-to-pair — read-only/write NDEF is enough for exchanging a
          pairing code, no HCE needed). -->

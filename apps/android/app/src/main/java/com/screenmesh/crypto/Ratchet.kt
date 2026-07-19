@@ -42,7 +42,7 @@ data class RatchetKeyPair(
     val privateKey: X25519PrivateKeyParameters,
 )
 
-private data class SkippedKey(
+internal data class SkippedKey(
     val ratchetPublicKeyB64: String,
     val messageNumber: Int,
     val messageKeyB64: String,

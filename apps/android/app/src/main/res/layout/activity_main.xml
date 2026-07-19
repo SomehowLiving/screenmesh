@@ -81,6 +81,31 @@
             android:text="Not joined."
             android:layout_marginTop="8dp" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Nearby pairing (BLE) — UNTESTED, see docs/Android.md"
+            android:layout_marginTop="16dp" />
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btn_scan_nearby"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Scan nearby" />
+
+            <Button
+                android:id="@+id/btn_advertise_ble"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Advertise via BLE" />
+        </LinearLayout>
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

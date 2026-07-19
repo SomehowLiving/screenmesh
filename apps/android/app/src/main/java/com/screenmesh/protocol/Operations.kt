@@ -76,7 +76,7 @@ data class CarryBundlePayload(
     val hopLimit: Int,
 )
 
-/** Secure file drop chunk — NOT yet applied by MeshEngine.kt. */
+/** Secure file drop chunk — applied by MeshEngine.kt's sendFileChunks / FILE_CHUNK case. */
 @Serializable
 data class FileChunkMeta(
     val objectType: String,
