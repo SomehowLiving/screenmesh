@@ -37,8 +37,12 @@ Gradle were installed directly in this environment, and the project now
 has a committed Gradle wrapper (`gradlew`/`gradlew.bat`) so anyone else
 can build it the same way without a manual toolchain install. `gradlew
 compileDebugKotlin`, `gradlew assembleDebug`, and `gradlew lintDebug` all
-pass — see "Verification status" for exactly what that does and doesn't
-prove.
+pass, and — the test that actually matters — a real cross-language
+interop run against the TypeScript engine over a live relay passed too,
+in both directions, on the first attempt. See "Verification status" for
+the full picture, including what's still NOT proven (there's no
+device/emulator here, so the UI/BLE/Wi-Fi Direct/NFC layers remain
+untested).
 
 ## What's implemented
 
@@ -260,18 +264,92 @@ class-`private` property can't reach), and an Android lint error
 `ACCESS_COARSE_LOCATION` alongside it on API 31+ — `CoarseFineLocation`
 — fixed in `AndroidManifest.xml`).
 
-**What is still NOT verified — no device or emulator exists in this
-environment:**
-- The app has never actually **run**. Compiling and lint-checking prove
-  the Kotlin/manifest/resource shapes are internally consistent; they
-  prove nothing about runtime behavior.
-- **Cross-language wire compatibility is still unconfirmed.** The
-  single biggest risk named throughout this doc — a subtly wrong base64
-  alphabet, a reordered signed-bytes field, an HKDF info-string typo —
-  would compile and lint clean and still silently fail the moment a real
-  Android phone and a real browser try to talk to each other over a live
-  relay. That first real interop run is still the next thing to do
-  before relying on this for anything real.
+### Cross-language wire compatibility: confirmed
+
+The single biggest risk named throughout this doc — a subtly wrong
+base64 alphabet, a reordered signed-bytes field, an HKDF info-string
+typo — would compile and lint clean and still silently fail the moment a
+real Android phone and a real browser (or Node) try to talk to each
+other over a live relay. **That test has now been run, in both
+directions, and it passed clean on the first attempt — no bugs found.**
+
+The protocol/crypto/transport/sync layers have no Android-API dependency
+(confirmed by `compileDebugKotlin` succeeding without ever touching
+`android.*` in those files), so they run as an ordinary JVM program —
+no emulator needed to prove wire compatibility, only to prove the
+Activity/UI/BLE-radio layers work. Two small programs exercise this:
+
+- **`packages/sync/scripts/interop-with-android.ts`** — device A, the
+  real TypeScript `MeshEngine`. Creates a workspace, writes a handoff
+  JSON file (serverUrl/workspaceId/pairingToken/workspaceKeyB64), starts
+  its engine, waits for device B to come online, sends it a greeting
+  object, and waits for a reply.
+- **`apps/android/app/src/main/java/com/screenmesh/InteropSmoke.kt`** —
+  device B, the Kotlin `MeshEngine`, compiled as part of the normal
+  Android module (`compileDebugKotlin`) but run directly with `java`
+  (not part of the shipped app — no reference from `MainActivity` or
+  the manifest). Reads the handoff file, joins over HTTP, waits for the
+  greeting, prints it, and replies.
+
+**Result, verbatim** (relay server already running locally on
+`127.0.0.1:8787`):
+
+```
+# TypeScript side (device A)
+[1/5] workspace b61f1254-... created (owner bb55ec73-...)
+[2/5] handoff written to .../interop-handoff.json — start the Kotlin side now
+[3/5] Kotlin device 1bb00824-... is online
+[4/5] sent greeting to Kotlin device, waiting for its reply...
+[5/5] received reply from Kotlin device: "hello from Kotlin"
+ANDROID INTEROP OK
+
+# Kotlin side (device B)
+[1/5] joining workspace b61f1254-... as a fresh Kotlin device
+[2/5] joined; owner is bb55ec73-..., my id is 1bb00824-...
+[3/5] received object from bb55ec73-...: "hello from TypeScript"
+[4/5] replied to bb55ec73-...
+[5/5] done
+KOTLIN INTEROP OK
+```
+
+This exercised, end to end, in both directions: HTTP workspace join
+(`DeviceInfo`/`JoinWorkspaceRequest` JSON shape, Ed25519/X25519 public
+key export format), the relay's WebSocket auth challenge (Ed25519
+sign/verify), presence (`PresenceEntry` JSON shape), the Double Ratchet
+bootstrap (X25519 ECDH + HKDF from the pairing secret), ratchet
+send/receive chain stepping (HMAC), envelope sealing/verification
+(canonical-bytes signing, AES-GCM), and `MeshEngine`'s op encoding
+(`CREATE_OBJECT`/`SEND_TO_DEVICE` `Operation`/`MeshObject` JSON shapes).
+Every one of those was a named risk earlier in this doc; none of them
+were bugs.
+
+**To re-run this yourself:**
+```sh
+# 1. Start the relay server (repo root)
+pnpm --filter @screenmesh/server exec tsx src/index.ts
+
+# 2. Compile the Android module and get its plain-JVM runtime classpath
+cd apps/android
+./gradlew compileDebugKotlin printRuntimeClasspath
+
+# 3. Run the TS side (repo root), pointed at a scratch file
+pnpm exec tsx packages/sync/scripts/interop-with-android.ts /tmp/interop-handoff.json
+
+# 4. Once it prints "handoff written", run the Kotlin side with the
+#    compiled classes dir (app/build/tmp/kotlin-classes/debug) plus the
+#    non-Android .jar entries from step 2's classpath output
+#    (okhttp, okio, kotlin-stdlib*, kotlinx-serialization-*, bcprov,
+#    org.jetbrains:annotations) joined with the OS path separator:
+java -cp "<classes-dir>;<jar1>;<jar2>;..." com.screenmesh.InteropSmokeKt /tmp/interop-handoff.json
+```
+
+**What this does NOT prove:** the Activity/UI layer, BLE/Wi-Fi
+Direct/NFC (real radios, real GATT callback timing), and identity/session
+persistence (`LocalState.kt`'s `SharedPreferences` usage) are still
+unexercised — those genuinely need a device or emulator, which this
+environment doesn't have. But the part of the risk that mattered
+most — "does this Kotlin port actually speak the same protocol as
+everything else" — is no longer a theoretical concern.
 - The BLE/Wi-Fi Direct/NFC code has never touched real Bluetooth/Wi-Fi
   Direct/NFC radios — compiling against the Android SDK's API surface
   confirms the calls are *shaped* correctly, not that the runtime

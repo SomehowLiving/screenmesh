@@ -62,3 +62,15 @@ dependencies {
     // interface — this isolates BouncyCastle behind Identity.kt/Ratchet.kt.
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 }
+
+// Prints the plain-JVM dependency classpath (one path per line), used to
+// run InteropSmoke.kt (the cross-language interop check against a real
+// TypeScript relay/engine — see docs/Android.md) directly with `java`
+// instead of on a device/emulator. Only the non-Android-API files in this
+// module (protocol/crypto/transport/sync, not MainActivity or
+// transport/nearby/*) are exercised that way.
+tasks.register("printRuntimeClasspath") {
+    doLast {
+        configurations.getByName("debugRuntimeClasspath").files.forEach { println(it.absolutePath) }
+    }
+}
