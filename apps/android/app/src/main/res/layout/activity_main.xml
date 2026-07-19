@@ -84,7 +84,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Nearby pairing (BLE) — UNTESTED, see docs/Android.md"
+            android:text="Nearby pairing (BLE / NFC) — UNTESTED, see docs/Android.md"
             android:layout_marginTop="16dp" />
         <LinearLayout
             android:layout_width="wrap_content"
@@ -104,7 +104,26 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:text="Advertise via BLE" />
+
+            <Button
+                android:id="@+id/btn_nfc_write"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Write to NFC tag" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Wi-Fi Direct (raw transport, not pairing) — UNTESTED"
+            android:layout_marginTop="16dp" />
+        <Button
+            android:id="@+id/btn_wifi_direct_scan"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Scan nearby (Wi-Fi Direct)" />
 
         <View
             android:layout_width="match_parent"

@@ -151,10 +151,12 @@ reassembles via an in-memory `incomingChunks` map (also not persisted —
 a reload mid-transfer loses partial progress and needs a re-send, same
 as the TS engine).
 
-### Nearby transports and the BLE pairing bootstrap
+### Nearby transports, all now wired into `MainActivity`
 
 `transport/nearby/{BleTransport,WifiDirectTransport,NfcPairing}.kt` are
-real implementations, not stubs:
+real implementations, not stubs, and — as of this pass — all three are
+actually instantiated and driven from `MainActivity` rather than sitting
+unused:
 
 - **`BleTransport`** implements `MeshTransport` fully: this device is
   simultaneously a GATT peripheral (advertises a ScreenMesh service +
@@ -168,42 +170,57 @@ real implementations, not stubs:
   peers via `WifiP2pManager`, and once a group forms, carries
   length-prefixed envelope bytes over a plain TCP socket between the
   group owner and the client. No MTU concerns here — it's a normal
-  socket. **Not wired into `MainActivity`** — the `WifiP2pManager`
-  `BroadcastReceiver` (`WIFI_P2P_PEERS_CHANGED_ACTION`/
-  `WIFI_P2P_CONNECTION_CHANGED_ACTION`) that would drive
-  `refreshPeers()`/`onGroupOwnerAddressKnown()` doesn't exist yet.
+  socket.
 - **`NfcPairing`** is a set of pure helper functions (not a
   `MeshTransport` — NFC is pairing-only, far too low-bandwidth for
   envelope traffic), matching docs/Roadmap.md Phase 3's "NFC tap-to-pair
   via passive tags" design rather than the deprecated phone-to-phone
   Android Beam: write a pairing code onto a blank/rewritable NDEF tag,
-  read it back on tap. **Not wired into `MainActivity`** — its
-  `enableForegroundDispatch()`/`disableForegroundDispatch()` need
-  `onResume`/`onPause` hooks that don't exist yet.
+  read it back on tap.
 
-**BLE nearby pairing bootstrap — wired into `MainActivity`.** Rather than
-invent a new trust protocol for BLE, `BleTransport` serves an extra
-read-only GATT characteristic (`localPairingCode`) carrying the EXACT
-SAME "SM1.…" string a QR code or NFC tag already carries. `MainActivity`
-now has two buttons exercising this end to end:
-- **Scan nearby**: requests BLE runtime permissions if needed, starts
-  `BleTransport`, and on the first nearby ScreenMesh peer found, reads
-  its pairing characteristic and pre-fills the pairing-code field —
-  exactly as if that code had been scanned from a QR.
-- **Advertise via BLE**: mints a fresh single-use pairing token via a new
-  `rotatePairingTokenHttp` call (owner-only, mirrors the web app's own
-  invite action — POST `/workspaces/:id/pairing-token`), builds and
-  encodes a `PairingPayload` with it, and offers the resulting code over
-  BLE for 5 minutes.
+**Two pairing bootstraps (BLE, NFC) — no new trust protocol.** Rather
+than invent one, both just move the EXACT SAME "SM1.…" string a QR code
+already carries, then fall through to the ordinary
+`decodePairingPayload` + `joinWorkspaceHttp` flow. A shared
+`mintPairingCode()` helper in `MainActivity` mints a fresh single-use
+pairing token via `rotatePairingTokenHttp` (owner-only, mirrors the web
+app's own invite action — POST `/workspaces/:id/pairing-token`) and
+encodes it; both bootstraps use it:
+- **BLE** — `BleTransport` serves an extra read-only GATT characteristic
+  (`localPairingCode`) with the code. **Scan nearby** starts scanning and
+  reads it off the first nearby peer found, pre-filling the pairing-code
+  field; **Advertise via BLE** mints a code and offers it for 5 minutes.
+- **NFC** — **Write to NFC tag** mints a code and arms a 30-second
+  window during which the next tag tap writes it via
+  `NfcPairing.writePairingCodeToTag`; any tag tap outside that window (or
+  with nothing armed) is treated as a read via
+  `NfcPairing.readPairingCodeFromIntent`, pre-filling the pairing-code
+  field exactly like BLE's scan does. Wired into both `onCreate`
+  (a tap can cold-launch the Activity via the manifest's NDEF_DISCOVERED
+  filter) and `onNewIntent` (a warm re-launch of the already-running
+  `singleTop` Activity) — a review pass caught that only the warm path
+  was originally handled, which would have silently no-op'd every
+  cold-start tag tap.
 
-None of the actual trust/crypto logic is new here — BLE only ever moves
-the same string every other pairing channel moves, then falls through to
-the ordinary `decodePairingPayload` + `joinWorkspaceHttp` flow. A review
-pass caught a real race in the first version of this: `onPeerDiscovered`
-and `requestPairingCode` could both call `connectToPeripheral` for the
-same newly-found device, opening two concurrent GATT connections:
-`connectToPeripheral` is now idempotent per device address
-(`connectingAddresses`), fixed before this landed.
+**Wi-Fi Direct — wired in as a raw transport, not a pairing bootstrap**
+(matching the architecture's division of labor: BLE/NFC handle nearby
+rendezvous, Wi-Fi Direct's role is higher-throughput data once devices
+already know about each other). **Scan nearby (Wi-Fi Direct)** registers
+a `BroadcastReceiver` for `WIFI_P2P_PEERS_CHANGED_ACTION`/
+`WIFI_P2P_CONNECTION_CHANGED_ACTION` (driving `refreshPeers()`/the new
+`handleConnectionChanged()`), starts discovery, and auto-connects to the
+first peer found — there's no pairing-code exchange over this channel in
+this pass, just visibility that the discovery/connection plumbing works
+structurally.
+
+A review pass caught three real bugs in this round, all fixed before it
+landed: (1) a BLE race where `onPeerDiscovered` and `requestPairingCode`
+could both call `connectToPeripheral` for the same newly-found device,
+opening two concurrent GATT connections — `connectToPeripheral` is now
+idempotent per device address; (2) the cold-start NFC intent bug above;
+(3) an unbounded NFC "write mode" that would have stayed armed forever,
+risking an accidental overwrite of some unrelated tag tapped long after
+the user forgot they'd armed it — now expires after 30 seconds.
 
 ## Setup
 

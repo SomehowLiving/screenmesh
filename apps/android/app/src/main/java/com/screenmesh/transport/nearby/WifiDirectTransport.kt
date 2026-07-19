@@ -33,10 +33,11 @@ private const val PORT = 8988
  * The OS delivers group-formation progress via broadcasts
  * (`WIFI_P2P_PEERS_CHANGED_ACTION`, `WIFI_P2P_CONNECTION_CHANGED_ACTION`),
  * which are inherently Activity/lifecycle-bound — this class exposes
- * `refreshPeers()` and `onGroupOwnerAddressKnown()` for the hosting
- * Activity's `BroadcastReceiver` to call, rather than registering its own
- * receiver (this class has no Activity to tie that registration's
- * lifecycle to).
+ * `refreshPeers()` and `handleConnectionChanged()` for the hosting
+ * Activity's `BroadcastReceiver` to call on those two actions
+ * respectively, rather than registering its own receiver (this class has
+ * no Activity to tie that registration's lifecycle to). Wired into
+ * MainActivity's "Scan nearby (Wi-Fi Direct)" button.
  *
  * UNTESTED: written against the documented android.net.wifi.p2p APIs
  * with no device pair available in this environment to run it on. See
@@ -66,9 +67,18 @@ class WifiDirectTransport(private val context: Context) : MeshTransport {
             statusHandlers.forEach { it(value) }
         }
 
+    /** Fired once per newly-discovered nearby Wi-Fi Direct peer. */
+    @Volatile var onPeerDiscovered: ((Peer) -> Unit)? = null
+
     private val peerListListener = WifiP2pManager.PeerListListener { peers ->
+        val previousAddresses = discoveredPeers.map { it.deviceAddress }.toSet()
         discoveredPeers.clear()
         discoveredPeers.addAll(peers.deviceList)
+        for (device in peers.deviceList) {
+            if (device.deviceAddress !in previousAddresses) {
+                onPeerDiscovered?.invoke(Peer(deviceId = device.deviceAddress, name = device.deviceName, transport = kind))
+            }
+        }
     }
 
     fun start() {
@@ -119,6 +129,25 @@ class WifiDirectTransport(private val context: Context) : MeshTransport {
                 }
             },
         )
+    }
+
+    /**
+     * Call directly from the hosting Activity's
+     * WIFI_P2P_CONNECTION_CHANGED_ACTION receiver — resolves the
+     * connection info via our own `channel` (kept private so the Activity
+     * doesn't need direct WifiP2pManager.Channel access) and, if this
+     * device isn't the group owner, connects to it via
+     * [onGroupOwnerAddressKnown]. The group-owner side needs no action
+     * here — startServerSocket's accept loop handles it.
+     */
+    fun handleConnectionChanged() {
+        val ch = channel ?: return
+        manager.requestConnectionInfo(ch) { info ->
+            val address = info.groupOwnerAddress
+            if (info.groupFormed && !info.isGroupOwner && address != null) {
+                address.hostAddress?.let { onGroupOwnerAddressKnown(it) }
+            }
+        }
     }
 
     /**
