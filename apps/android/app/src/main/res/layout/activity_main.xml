@@ -104,14 +104,21 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:text="Advertise via BLE" />
-
-            <Button
-                android:id="@+id/btn_nfc_write"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="Write to NFC tag" />
         </LinearLayout>
+
+        <!--
+          Deliberately its own row, not crammed into the row above: three
+          wrap_content buttons side by side ran out of horizontal width on
+          a real device/emulator, squeezing this one into a near-zero-width
+          sliver with vertically-wrapped letters (found via on-device
+          testing, not visible from just reading the XML).
+        -->
+        <Button
+            android:id="@+id/btn_nfc_write"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Write to NFC tag" />
 
         <TextView
             android:layout_width="wrap_content"

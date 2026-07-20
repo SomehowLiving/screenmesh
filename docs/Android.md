@@ -31,18 +31,20 @@ first (data model, envelope sealing/verification, the Double Ratchet,
 the relay WebSocket + pairing HTTP client), reviewed-by-eye against the
 TypeScript source rather than compiled.
 
-**That tooling gap has since been closed.** A JDK (Temurin 17), the
-Android SDK (platform 34, build-tools 34.0.0, platform-tools), and
-Gradle were installed directly in this environment, and the project now
-has a committed Gradle wrapper (`gradlew`/`gradlew.bat`) so anyone else
-can build it the same way without a manual toolchain install. `gradlew
-compileDebugKotlin`, `gradlew assembleDebug`, and `gradlew lintDebug` all
-pass, and — the test that actually matters — a real cross-language
-interop run against the TypeScript engine over a live relay passed too,
-in both directions, on the first attempt. See "Verification status" for
-the full picture, including what's still NOT proven (there's no
-device/emulator here, so the UI/BLE/Wi-Fi Direct/NFC layers remain
-untested).
+**That tooling gap has since been closed — fully.** A JDK (Temurin 17),
+the Android SDK (platform 34, build-tools 34.0.0, platform-tools,
+emulator, a system image), and Gradle were installed directly in this
+environment; the project has a committed Gradle wrapper
+(`gradlew`/`gradlew.bat`); a real hardware-accelerated emulator (WHPX)
+was set up and booted. `gradlew compileDebugKotlin`, `assembleDebug`, and
+`lintDebug` all pass; a real cross-language interop run against the
+TypeScript engine over a live relay passed in both directions; and the
+real APK was installed and driven on a real (emulated) Android 14 device
+end to end — join, receive, send, and identity persistence all
+confirmed working through the actual Android runtime, not just a JVM
+proxy for it. See "Verification status" for the full picture, including
+the one thing that's still genuinely untested: BLE/Wi-Fi Direct/NFC have
+no radio hardware to talk to in an emulator.
 
 ## What's implemented
 
@@ -360,16 +362,69 @@ pnpm exec tsx packages/sync/scripts/interop-with-android.ts /tmp/interop-handoff
 java -cp "<classes-dir>;<jar1>;<jar2>;..." com.screenmesh.InteropSmokeKt /tmp/interop-handoff.json
 ```
 
-**What this does NOT prove:** the Activity/UI layer, BLE/Wi-Fi
-Direct/NFC (real radios, real GATT callback timing), and identity/session
-persistence (`LocalState.kt`'s `SharedPreferences` usage) are still
-unexercised — those genuinely need a device or emulator, which this
-environment doesn't have. But the part of the risk that mattered
-most — "does this Kotlin port actually speak the same protocol as
-everything else" — is no longer a theoretical concern.
-- The BLE/Wi-Fi Direct/NFC code has never touched real Bluetooth/Wi-Fi
-  Direct/NFC radios — compiling against the Android SDK's API surface
-  confirms the calls are *shaped* correctly, not that the runtime
-  behavior (GATT callback timing, MTU negotiation, characteristic
-  read/write races) is correct.
-- No unit or instrumented tests exist for this module.
+**What the JVM-only interop test does NOT prove:** the Activity/UI
+layer, BLE/Wi-Fi Direct/NFC (real radios, real GATT callback timing), and
+identity/session persistence (`LocalState.kt`'s `SharedPreferences`
+usage) aren't exercised by running plain Kotlin classes on a desktop
+JVM — those need a real Android runtime. See the next section: that gap
+is now closed too.
+
+### Real-device verification: also confirmed
+
+WHPX (Windows Hypervisor Platform) turned out to be available in this
+environment (`emulator -accel-check` reported it installed and usable)
+despite no admin rights to enable it explicitly — so a real, hardware
+-accelerated Android emulator was set up: Temurin JDK 17 (already
+installed for the Gradle toolchain), the `emulator` and
+`system-images;android-34;google_apis;x86_64` SDK packages, an AVD
+(`screenmesh_test`, Pixel 6 profile), booted headless
+(`-no-window -gpu swiftshader_indirect`) to a fully-booted Android 14
+(API 34) device in under a minute.
+
+**What was actually run on it, for real — not simulated:**
+- Installed the real `app-debug.apk` from `./gradlew assembleDebug`
+  (`adb install`) — it installs and launches without crashing.
+- **Join flow, on real hardware**: entered a pairing code (minted via a
+  new `packages/sync/scripts/mint-pairing-code.ts` dev helper) into the
+  running app via `adb shell input text` + UI automation, tapped **Join
+  workspace** — the app's real `OkHttp` client, real `BouncyCastle`
+  Ed25519/X25519 key generation, and real JSON serialization completed
+  an actual HTTP join against the relay server running on the host,
+  reachable via the emulator's `10.0.2.2` host-loopback alias. Status:
+  `Joined "android-interop" as Android Phone`.
+- **Full receive path, on real hardware**: with
+  `packages/sync/scripts/interop-with-android.ts` running as a live TS
+  peer, the on-device app received a real relay-delivered, Double
+  -Ratchet-encrypted, Ed25519-signed envelope; verified it; decrypted
+  it; and displayed the correct plaintext in the UI log — confirmed both
+  via `adb logcat`'s accessibility trace and a screenshot showing
+  `Received from <deviceId>: {"text":"hello from TypeScript"}`.
+- **Full send path, on real hardware**: typed a message into the
+  message field, tapped **Send to all** — the app's real `sendObject`
+  call (ratchet-encrypt, seal, sign, transmit over the real device's
+  network stack) completed without error, logging
+  `Sent: hello_from_real_android_device`.
+- **Identity/session persistence, on real hardware**: reinstalling the
+  APK over the existing install (`adb install -r`, which preserves app
+  data) and relaunching auto-reconnected via `LocalStateStore`
+  (`SharedPreferences`) without a new pairing code —
+  `Reconnected as Android Phone`.
+
+**A real, visible UI bug was found this way that no amount of reading
+the XML would have caught**: the "Nearby pairing" row packed three
+`wrap_content` buttons (Scan nearby / Advertise via BLE / Write to NFC
+tag) side by side, and on a real 1080px-wide screen the third button ran
+out of horizontal space and rendered as a near-zero-width vertical
+sliver with each letter of "WRITE TO NFC TAG" wrapped onto its own line.
+Fixed by moving "Write to NFC tag" to its own row; rebuilt, reinstalled,
+and visually reconfirmed correct.
+
+**What's still NOT exercised, even now**: BLE/Wi-Fi Direct/NFC still
+have no real radio to talk to — the emulator has no Bluetooth/NFC
+hardware and no second device to pair with, so `BleTransport`,
+`WifiDirectTransport`, and `NfcPairing` remain compiled-and-reviewed but
+not run. That would need either two physical devices or a more elaborate
+multi-emulator radio-bridging setup, neither available here. No unit or
+instrumented test suite exists for this module — everything above was
+exercised through manual `adb`-driven UI automation, once, not as a
+repeatable automated test.
