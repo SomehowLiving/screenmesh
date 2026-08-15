@@ -285,9 +285,49 @@ independent crypto scheme with no additional security benefit.
 
 **Verification status**: compiles, lints, and assembles clean as part of
 the normal `apps/android` Gradle build — plain Kotlin +
-`android.media.AudioRecord`/`AudioTrack`, no native/JNI step. The
-acoustic link itself has NOT been exercised over real air on real
-hardware in this environment (same caveat as BLE/Wi-Fi Direct/NFC below).
+`android.media.AudioRecord`/`AudioTrack`, no native/JNI step.
+
+**The DSP core itself has also been round-trip tested, on the JVM, without
+real audio hardware.** `com.dweekly.cyrinxhil.AcousticLoopbackTest.kt`
+(same "compiled by `compileDebugKotlin`, run directly with `java`,
+not part of the shipped app" pattern as `InteropSmoke.kt`) calls
+`AcousticPhyLink.encode()` on one instance to turn a message into actual
+audio samples (real OFDM/D-CSS modulation, real preamble), runs those
+samples through a simulated channel (silence padding + additive noise —
+not a bit-perfect passthrough), and feeds them into a second, independent
+`AcousticPhyLink.ingest()` to decode. All three test payloads (30, 200,
+and 5 bytes) round-tripped byte-for-byte:
+```
+I/CyrinxHILAndroid: Preamble lock found! start=4000 (first crossing=4000) corr=0.99993724 snrDb=38.97664
+I/CyrinxHILAndroid: Header DECODED SUCCESSFULLY! shift=0 length=30 mode=ROBUST_DCSS
+[0] sent 30 bytes, samples=11512, decoded=1 frame(s), match=true
+[1] sent 200 bytes, samples=55032, decoded=1 frame(s), match=true
+[2] sent 5 bytes, samples=5112, decoded=1 frame(s), match=true
+ACOUSTIC PHY LOOPBACK OK
+```
+This exercises the real modulation/demodulation math (preamble
+correlator, header codec, OFDM symbol mapping) — a bug in any of those
+would fail this test — not just protocol-level bookkeeping. `AcousticPhyLink`
+calls `android.util.Log` directly (same as `AndroidAudioBackend`), which
+throws `Stub!` under the real `android.jar` on a plain JVM classpath, so
+running this needs a minimal same-package `android.util.Log` shim ahead
+of `android.jar` on the classpath — a JVM test-harness substitute only,
+not a change to app or vendored code:
+```sh
+cd apps/android
+./gradlew compileDebugKotlin
+# write a trivial android/util/Log.java (v/d/i/w/e print to stdout) and
+# javac -d <shim-out> android/util/Log.java
+java -cp "<shim-out>;<classes-dir>;<kotlin-stdlib jar>" com.dweekly.cyrinxhil.AcousticLoopbackTestKt
+```
+
+**What this does NOT prove**: real air. No emulator can hold a mic/speaker
+conversation with itself, and there's no second physical device in this
+environment, so `AndroidAudioBackend`'s actual `AudioRecord`/`AudioTrack`
+I/O — real microphone frequency response, real room echo/reverb, real
+clock drift between two independent devices — remains untested (same
+caveat as BLE/Wi-Fi Direct/NFC below, which need real radios/a second
+device for the same reason).
 
 ## Setup
 
