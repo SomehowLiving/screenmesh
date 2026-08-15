@@ -150,6 +150,8 @@ data class EngineConfig(
     val onObjectReceived: ((MeshObject, String) -> Unit)? = null,
     /** Fires when another device hands an object off to us via continueOnDevice. */
     val onContinueOnDevice: ((FocusRequest) -> Unit)? = null,
+    /** Optional Android-local persistence for objects/deliveries/outbox state. */
+    val stateStore: EngineStateStore? = null,
 )
 
 class MeshEngine(private val cfg: EngineConfig) {
@@ -183,6 +185,7 @@ class MeshEngine(private val cfg: EngineConfig) {
 
     fun start() {
         pairingSecret = cfg.workspaceKey.encoded
+        restoreState()
         cfg.transport.onMessage { data ->
             try {
                 handleIncoming(data)
@@ -204,6 +207,7 @@ class MeshEngine(private val cfg: EngineConfig) {
     }
 
     fun stop() {
+        persistState()
         sweepExecutor?.shutdown()
         sweepExecutor = null
         cfg.transport.disconnect()
@@ -223,6 +227,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             expiresAt = options.expiresAt,
         )
         objects[obj.id] = obj
+        persistState()
 
         // Secure file drop: large files travel as a sequence of small chunk
         // envelopes instead of one giant one (see FILE_CHUNK_SIZE_B64).
@@ -248,6 +253,7 @@ class MeshEngine(private val cfg: EngineConfig) {
                 options = if (!options.isEmpty) options else null,
             )
             deliveries[delivery.id] = delivery
+            persistState()
 
             // Real object deliveries are carry-eligible: if this recipient is
             // unreachable directly, another online device may later carry the
@@ -271,6 +277,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             }
             if (sentLive) {
                 deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.SENDING)
+                persistState()
             }
         }
         return obj
@@ -326,6 +333,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         val existing = objects[objectId] ?: return
         val nowMs = now()
         objects[objectId] = existing.copy(content = content, updatedAt = nowMs)
+        persistState()
         broadcastOps(
             listOf(
                 makeOp(
@@ -360,6 +368,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         val delivery = deliveries.values.find { it.objectId == objectId && it.destinationDeviceId == me } ?: return
         if (delivery.status == DeliveryStatuses.OPENED || delivery.status == DeliveryStatuses.PENDING) return
         deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.OPENED, openedAt = now())
+        persistState()
         sendOps(
             obj.createdBy,
             listOf(makeOp(OperationTypes.MARK_OPENED, objectId, Json.encodeToJsonElement(ObjectRefPayload.serializer(), ObjectRefPayload(objectId)))),
@@ -376,6 +385,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         } ?: return
         val nowMs = now()
         deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.DELIVERED, deliveredAt = nowMs)
+        persistState()
         sendOps(
             delivery.sourceDeviceId,
             listOf(makeOp(OperationTypes.MARK_DELIVERED, objectId, Json.encodeToJsonElement(ObjectRefPayload.serializer(), ObjectRefPayload(objectId)))),
@@ -398,6 +408,7 @@ class MeshEngine(private val cfg: EngineConfig) {
     fun deleteObjectLocal(objectId: String) {
         deliveries.values.filter { it.objectId == objectId }.forEach { deliveries.remove(it.id) }
         objects.remove(objectId)
+        persistState()
     }
 
     /** Capability routing (docs/Roadmap.md Phase 5). Online devices first. */
@@ -418,6 +429,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         devices.remove(deviceId)
         peerKeys.remove(deviceId)
         ratchets.remove(deviceId)
+        persistState()
     }
 
     fun objectsSnapshot(): List<MeshObject> = objects.values.toList()
@@ -427,6 +439,88 @@ class MeshEngine(private val cfg: EngineConfig) {
     fun devicesSnapshot(): List<Device> = devices.values.toList()
 
     // --- internals ---
+
+    private fun restoreState() {
+        val saved = cfg.stateStore?.load(cfg.workspaceId, me) ?: return
+        seq = saved.seq
+        objects.clear()
+        saved.objects.forEach { objects[it.id] = it }
+        deliveries.clear()
+        saved.deliveries.forEach { deliveries[it.id] = it }
+        devices.clear()
+        saved.devices.forEach { devices[it.id] = it }
+        seenAt.clear()
+        seenAt.putAll(saved.seenAt)
+        outbox.clear()
+        saved.outbox.forEach { entry ->
+            outbox[entry.bundleId] = OutboxEntry(
+                bundleId = entry.bundleId,
+                sourceDeviceId = entry.sourceDeviceId,
+                destinationDeviceId = entry.destinationDeviceId,
+                encryptedPayload = fromBase64(entry.encryptedPayloadB64),
+                createdAt = entry.createdAt,
+                expiresAt = entry.expiresAt,
+                hopLimit = entry.hopLimit,
+                offeredTo = entry.offeredTo,
+            )
+        }
+        carried.clear()
+        saved.carried.forEach { bundle ->
+            carried[bundle.bundleId] = DeliveryBundle(
+                bundleId = bundle.bundleId,
+                sourceDeviceId = bundle.sourceDeviceId,
+                destinationDeviceId = bundle.destinationDeviceId,
+                workspaceId = bundle.workspaceId,
+                encryptedPayload = fromBase64(bundle.encryptedPayloadB64),
+                createdAt = bundle.createdAt,
+                expiresAt = bundle.expiresAt,
+                hopLimit = bundle.hopLimit,
+                signature = fromBase64(bundle.signatureB64),
+                offeredTo = bundle.offeredTo,
+            )
+        }
+    }
+
+    private fun persistState() {
+        val store = cfg.stateStore ?: return
+        store.save(
+            cfg.workspaceId,
+            me,
+            EngineState(
+                seq = seq,
+                objects = objects.values.toList(),
+                deliveries = deliveries.values.toList(),
+                devices = devices.values.toList(),
+                seenAt = seenAt.toMap(),
+                outbox = outbox.values.map { entry ->
+                    PersistedOutboxEntry(
+                        bundleId = entry.bundleId,
+                        sourceDeviceId = entry.sourceDeviceId,
+                        destinationDeviceId = entry.destinationDeviceId,
+                        encryptedPayloadB64 = toBase64(entry.encryptedPayload),
+                        createdAt = entry.createdAt,
+                        expiresAt = entry.expiresAt,
+                        hopLimit = entry.hopLimit,
+                        offeredTo = entry.offeredTo,
+                    )
+                },
+                carried = carried.values.map { bundle ->
+                    PersistedDeliveryBundle(
+                        bundleId = bundle.bundleId,
+                        sourceDeviceId = bundle.sourceDeviceId,
+                        destinationDeviceId = bundle.destinationDeviceId,
+                        workspaceId = bundle.workspaceId,
+                        encryptedPayloadB64 = toBase64(bundle.encryptedPayload),
+                        createdAt = bundle.createdAt,
+                        expiresAt = bundle.expiresAt,
+                        hopLimit = bundle.hopLimit,
+                        signatureB64 = toBase64(bundle.signature),
+                        offeredTo = bundle.offeredTo,
+                    )
+                },
+            ),
+        )
+    }
 
     /**
      * Get-or-create the Double Ratchet session with a peer (docs/Security.md
@@ -507,6 +601,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             hopLimit = hopLimit,
             offeredTo = emptyList(),
         )
+        persistState()
         return false
     }
 
@@ -548,6 +643,7 @@ class MeshEngine(private val cfg: EngineConfig) {
                 outbox.remove(entry.bundleId)
             }
         }
+        persistState()
     }
 
     /**
@@ -566,6 +662,7 @@ class MeshEngine(private val cfg: EngineConfig) {
                 carried.remove(bundle.bundleId)
             }
         }
+        persistState()
     }
 
     /**
@@ -607,6 +704,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             )
             if (sent) {
                 outbox[entry.bundleId] = entry.copy(hopLimit = nextHopLimit, offeredTo = entry.offeredTo + carrier.id)
+                persistState()
             }
         }
     }
@@ -623,6 +721,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             }
             objects.remove(obj.id)
         }
+        if (expired.isNotEmpty()) persistState()
     }
 
     /**
@@ -634,6 +733,7 @@ class MeshEngine(private val cfg: EngineConfig) {
     private fun pruneSeen() {
         val cutoff = now() - SEEN_RETENTION_MS
         seenAt.entries.filter { it.value < cutoff }.forEach { seenAt.remove(it.key) }
+        persistState()
     }
 
     /**
@@ -701,6 +801,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         for (obj in newObjects) {
             cfg.onObjectReceived?.invoke(obj, envelope.senderDeviceId)
         }
+        persistState()
     }
 
     /**

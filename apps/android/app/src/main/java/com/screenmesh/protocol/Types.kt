@@ -68,6 +68,7 @@ data class DeviceInfo(
 )
 
 /** Local roster entry — DeviceInfo plus presence/trust bookkeeping (Device in types.ts). */
+@Serializable
 data class Device(
     val id: String,
     val name: String,
@@ -93,6 +94,7 @@ data class MeshObject(
     val expiresAt: Long? = null,
 )
 
+@Serializable
 data class Delivery(
     val id: String,
     val objectId: String,

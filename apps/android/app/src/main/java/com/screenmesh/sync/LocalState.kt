@@ -10,11 +10,15 @@ import com.screenmesh.crypto.importEd25519PrivateKey
 import com.screenmesh.crypto.importEncryptionPrivateKey
 import com.screenmesh.crypto.importEncryptionPublicKey
 import com.screenmesh.crypto.importPublicKey
+import com.screenmesh.protocol.Delivery
+import com.screenmesh.protocol.Device
+import com.screenmesh.protocol.MeshObject
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private const val PREFS_NAME = "screenmesh_state"
 private const val KEY_STATE = "state_json"
+private const val KEY_ENGINE_PREFIX = "engine_json_"
 
 /**
  * JSON-serializable form of a DeviceIdentity — Kotlin mirror of
@@ -96,4 +100,70 @@ class LocalStateStore(context: Context) {
     fun clear() {
         prefs.edit().remove(KEY_STATE).apply()
     }
+}
+
+@Serializable
+data class PersistedOutboxEntry(
+    val bundleId: String,
+    val sourceDeviceId: String,
+    val destinationDeviceId: String,
+    val encryptedPayloadB64: String,
+    val createdAt: Long,
+    val expiresAt: Long,
+    val hopLimit: Int,
+    val offeredTo: List<String> = emptyList(),
+)
+
+@Serializable
+data class PersistedDeliveryBundle(
+    val bundleId: String,
+    val sourceDeviceId: String,
+    val destinationDeviceId: String,
+    val workspaceId: String,
+    val encryptedPayloadB64: String,
+    val createdAt: Long,
+    val expiresAt: Long,
+    val hopLimit: Int,
+    val signatureB64: String,
+    val offeredTo: List<String>? = null,
+)
+
+@Serializable
+data class EngineState(
+    val seq: Int = 0,
+    val objects: List<MeshObject> = emptyList(),
+    val deliveries: List<Delivery> = emptyList(),
+    val devices: List<Device> = emptyList(),
+    val seenAt: Map<String, Long> = emptyMap(),
+    val outbox: List<PersistedOutboxEntry> = emptyList(),
+    val carried: List<PersistedDeliveryBundle> = emptyList(),
+)
+
+interface EngineStateStore {
+    fun load(workspaceId: String, deviceId: String): EngineState?
+    fun save(workspaceId: String, deviceId: String, state: EngineState)
+    fun clear(workspaceId: String, deviceId: String)
+}
+
+class LocalEngineStateStore(context: Context) : EngineStateStore {
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    override fun load(workspaceId: String, deviceId: String): EngineState? {
+        val raw = prefs.getString(key(workspaceId, deviceId), null) ?: return null
+        return try {
+            Json.decodeFromString(EngineState.serializer(), raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override fun save(workspaceId: String, deviceId: String, state: EngineState) {
+        prefs.edit().putString(key(workspaceId, deviceId), Json.encodeToString(EngineState.serializer(), state)).apply()
+    }
+
+    override fun clear(workspaceId: String, deviceId: String) {
+        prefs.edit().remove(key(workspaceId, deviceId)).apply()
+    }
+
+    private fun key(workspaceId: String, deviceId: String): String = "$KEY_ENGINE_PREFIX$workspaceId:$deviceId"
 }

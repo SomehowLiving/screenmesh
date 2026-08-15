@@ -15,6 +15,8 @@ enum class TransportKind {
     NEARBY,
     LAN,
     LOCAL_P2P,
+    /** Acoustic (near-ultrasonic) — see transport/nearby/AcousticTransport.kt. */
+    ACOUSTIC,
 }
 
 enum class TransportStatus {

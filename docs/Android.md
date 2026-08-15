@@ -63,6 +63,7 @@ no radio hardware to talk to in an emulator.
 | BLE transport (real, unwired) | `transport/nearby/BleTransport.kt` | (new — no TS equivalent exists) |
 | Wi-Fi Direct transport (real, unwired) | `transport/nearby/WifiDirectTransport.kt` | (new — no TS equivalent exists) |
 | NFC pairing helper (real, unwired) | `transport/nearby/NfcPairing.kt` | (new — no TS equivalent exists) |
+| Acoustic transport (real, wired; vendored DSP) | `transport/nearby/AcousticTransport.kt` + `com/dweekly/cyrinxhil/*` | (new — no TS equivalent exists) |
 | Pairing HTTP client | `sync/PairingClient.kt` | `apps/agent/src/join.ts` + `apps/server/src/workspaces.ts` |
 | Identity/session persistence | `sync/LocalState.kt` | `packages/crypto/src/persist.ts` + `apps/agent/src/state.ts` |
 | Sync engine (reduced — see below) | `sync/MeshEngine.kt` | `packages/sync/src/engine.ts` |
@@ -108,17 +109,23 @@ offers), and the verify → ratchet-decrypt → apply receive path for
 `SEND_TO_DEVICE`, `MARK_DELIVERED`, `MARK_OPENED`, `REJECT_OBJECT`,
 `CARRY_BUNDLE`, `REVOKE_DEVICE`.
 
-**Object/delivery/ratchet-session persistence** is still in-memory only
-(`ConcurrentHashMap`s) — there is no Android storage layer
-(`packages/storage`'s Dexie/IndexedDB has no equivalent here; a Room
-database would be the natural fit). Restarting the app loses every
-object, delivery, and in-memory ratchet session (a lost ratchet session
-just re-bootstraps from identity + pairing secret on the first message,
-exactly as the ratchet design intends — docs/Security.md §5). This is
-**not a regression versus the desktop agent** — `apps/agent` keeps the
-exact same scope for the exact same reason (see its `state.ts` doc
-comment); only identity + session survive a restart on either platform.
-`sync/LocalState.kt` is what persists that narrower thing on Android.
+**Object/delivery/outbox persistence** now exists as a lightweight
+Android-local snapshot in `sync/LocalState.kt` (`LocalEngineStateStore`)
+and is wired through `MeshEngine` from `MainActivity`. Relaunching the
+app restores local objects, delivery rows, the device roster snapshot,
+seen-message dedupe state, queued outbox bundles, and carried bundles.
+This intentionally uses the existing kotlinx serialization +
+SharedPreferences stack to avoid adding a database dependency during the
+reference-app phase.
+
+**Still not persisted:** in-progress file-chunk reassembly buffers and
+Double Ratchet session internals remain in memory. A lost ratchet
+session re-bootstraps from identity keys + pairing secret on the first
+message, exactly as the ratchet design intends (docs/Security.md §5).
+For heavier production storage — especially large cached files — a Room
+database plus file-backed blob storage would be the natural next step.
+`sync/LocalState.kt` also continues to persist the narrower identity +
+workspace session needed to reconnect without re-pairing.
 
 **Explicitly NOT ported** (unimplemented ops are silently ignored,
 matching the TS engine's `default: break` — a scope line, not a bug):
@@ -223,6 +230,64 @@ idempotent per device address; (2) the cold-start NFC intent bug above;
 (3) an unbounded NFC "write mode" that would have stayed armed forever,
 risking an accidental overwrite of some unrelated tag tapped long after
 the user forgot they'd armed it — now expires after 30 seconds.
+
+### Acoustic transport: a fourth nearby transport, no radio at all
+
+`transport/nearby/AcousticTransport.kt` implements `MeshTransport` over
+the phone's own microphone and speaker — no Bluetooth/Wi-Fi/NFC radio
+involved. Rather than writing an OFDM/D-CSS modem from scratch, this
+wraps a vendored, pure-Kotlin acoustic modem from
+[dweekly/cyrinx](https://github.com/dweekly/cyrinx)'s own Android
+hardware-in-loop test app, under `com.dweekly.cyrinxhil` — see that
+package's `NOTICE.md` for exactly which files were vendored, which two
+needed a small compile/lint fix (and why), and full Apache-2.0
+attribution.
+
+**Why vendor cyrinx's Kotlin HIL code instead of depending on the
+upstream Swift package directly**: cyrinx's canonical, more capable
+implementation (a separate Swift/C wideband PHY measured at 36-70 kbps)
+is restricted to `.macOS(.v13)`/`.iOS(.v17)` in its own `Package.swift`
+— no Android or Linux target exists, and no Swift toolchain was
+available in the environment this was integrated in. Cyrinx's own README
+states Android JNI and transport-API integration "remain pending"
+upstream, and even its own Chat app's Android transport client is
+currently backed only by a `SimulatedChatTransportClient` — a live
+adapter doesn't exist yet even in the source project. The
+`Apps/HIL/android` test app, by contrast, ships a self-contained,
+pure-Kotlin acoustic modem with no Swift/JNI/native dependency at all —
+a real, buildable implementation, just not (yet) the one cyrinx's own
+production app uses.
+
+**Fundamentally different shape from BLE/Wi-Fi Direct/NFC**: cyrinx has
+no multi-peer discovery or addressing at the acoustic layer — it's a
+single half-duplex point-to-point link with whichever device is close
+enough to hear. One side must start as initiator (`Role.MASTER`) and the
+other as responder (`Role.SLAVE`); there's no auto-negotiation, and
+`discover()` can only ever report "linked" or "not linked," never a list
+of candidates. Wired into `MainActivity` as two buttons — **Start
+acoustic (initiator)** / **Start acoustic (responder)** — under a new
+"Acoustic (mic/speaker, no radio)" section, gated on `RECORD_AUDIO`.
+
+**Real, measured throughput/reliability limits, not a rough guess**:
+upstream's own README describes this ultrasonic "gears, ARQ, crypto
+envelope" stack as measured at **under 0.3 kbps over the air** — tens of
+bytes per second in the worst case — with a hard 4096-byte cap per
+logical message (larger sends are silently dropped, matching every other
+transport's send-has-no-failure-channel convention). This is a transport
+for a pairing code or a short text note within arm's reach of a working
+mic/speaker, not for files or even moderately-sized objects.
+
+`enableCrypto` is deliberately left `false`: every byte this transport
+carries is already a ScreenMesh `SecureEnvelope`, encrypted and signed
+one layer up by `MeshEngine`/`crypto/SecureEnvelopeCodec.kt`. Turning on
+cyrinx's own optional end-to-end envelope underneath would add a second,
+independent crypto scheme with no additional security benefit.
+
+**Verification status**: compiles, lints, and assembles clean as part of
+the normal `apps/android` Gradle build — plain Kotlin +
+`android.media.AudioRecord`/`AudioTrack`, no native/JNI step. The
+acoustic link itself has NOT been exercised over real air on real
+hardware in this environment (same caveat as BLE/Wi-Fi Direct/NFC below).
 
 ## Setup
 
@@ -424,7 +489,10 @@ have no real radio to talk to — the emulator has no Bluetooth/NFC
 hardware and no second device to pair with, so `BleTransport`,
 `WifiDirectTransport`, and `NfcPairing` remain compiled-and-reviewed but
 not run. That would need either two physical devices or a more elaborate
-multi-emulator radio-bridging setup, neither available here. No unit or
-instrumented test suite exists for this module — everything above was
-exercised through manual `adb`-driven UI automation, once, not as a
-repeatable automated test.
+multi-emulator radio-bridging setup, neither available here.
+`AcousticTransport`/`com.dweekly.cyrinxhil` is in the same boat — a
+single emulator has no way to have a real acoustic conversation with
+itself, so that link is compiled-and-reviewed only, not run over real
+air. No unit or instrumented test suite exists for this module —
+everything above was exercised through manual `adb`-driven UI
+automation, once, not as a repeatable automated test.

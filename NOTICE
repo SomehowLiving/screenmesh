@@ -1,0 +1,24 @@
+ScreenMesh third-party notices
+==============================
+
+This file lists third-party code vendored into this repository, as
+required by the licenses of that code. It does not itself declare a
+license for ScreenMesh's own source.
+
+## Cyrinx (acoustic transport)
+
+Path: apps/android/app/src/main/java/com/dweekly/cyrinxhil/
+
+Cyrinx
+Copyright 2026 Primatech Paper Co LLC
+
+This product includes software developed by Primatech Paper Co LLC
+(David E. Weekly) and contributors, from https://github.com/dweekly/cyrinx
+(commit 123a105e7714d96e5650c9d6c02db7ffb7dae007), licensed under the
+Apache License, Version 2.0:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+See apps/android/app/src/main/java/com/dweekly/cyrinxhil/NOTICE.md for
+exactly which files were vendored, why, and what was deliberately left
+out.

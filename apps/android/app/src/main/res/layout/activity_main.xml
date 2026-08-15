@@ -132,6 +132,32 @@
             android:layout_marginTop="8dp"
             android:text="Scan nearby (Wi-Fi Direct)" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Acoustic (mic/speaker, no radio) — very slow, UNTESTED"
+            android:layout_marginTop="16dp" />
+        <!--
+          Own column, not a horizontal row: two wrap_content buttons with
+          labels this long repeated the earlier NFC-button squeeze (see the
+          comment on btn_nfc_write above) — "Start acoustic (responder)"
+          wrapped into three cramped lines when placed beside the other
+          button. Found via on-device screenshot, not visible from the XML.
+        -->
+        <Button
+            android:id="@+id/btn_acoustic_initiator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Start acoustic (initiator)" />
+
+        <Button
+            android:id="@+id/btn_acoustic_responder"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Start acoustic (responder)" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

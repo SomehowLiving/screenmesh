@@ -27,6 +27,7 @@ import com.screenmesh.crypto.importWorkspaceKey
 import com.screenmesh.protocol.MeshObjectTypes
 import com.screenmesh.sync.AppState
 import com.screenmesh.sync.EngineConfig
+import com.screenmesh.sync.LocalEngineStateStore
 import com.screenmesh.sync.LocalStateStore
 import com.screenmesh.sync.MeshEngine
 import com.screenmesh.sync.joinWorkspaceHttp
@@ -36,9 +37,11 @@ import com.screenmesh.sync.toDeviceIdentity
 import com.screenmesh.transport.Peer
 import com.screenmesh.transport.RelayAuth
 import com.screenmesh.transport.RelayTransport
+import com.screenmesh.transport.nearby.AcousticTransport
 import com.screenmesh.transport.nearby.BleTransport
 import com.screenmesh.transport.nearby.NfcPairing
 import com.screenmesh.transport.nearby.WifiDirectTransport
+import com.dweekly.cyrinxhil.Role as AcousticRole
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -63,12 +66,16 @@ private const val NFC_WRITE_ARM_WINDOW_MS = 30_000L
  * FIRST join calls joinWorkspaceHttp; every subsequent launch just
  * reopens the relay connection with the same identity.
  *
- * Also exercises all three nearby-pairing bootstraps — BLE, NFC, and
- * (as a raw transport rather than a pairing bootstrap) Wi-Fi Direct.
- * None of these invent a new trust protocol: BLE and NFC both just move
- * the exact same "SM1.…" pairing-code string a QR carries, then fall
- * through to the ordinary decodePairingPayload + joinWorkspaceHttp flow.
- * All three are UNTESTED on real hardware — see docs/Android.md.
+ * Also exercises all three radio-based nearby-pairing bootstraps — BLE,
+ * NFC, and (as a raw transport rather than a pairing bootstrap) Wi-Fi
+ * Direct — plus a fourth, non-radio transport: acoustic (near-ultrasonic
+ * sound over the mic/speaker, via the vendored `com.dweekly.cyrinxhil`
+ * DSP — see `AcousticTransport.kt`). BLE and NFC both just move the exact
+ * same "SM1.…" pairing-code string a QR carries, then fall through to
+ * the ordinary decodePairingPayload + joinWorkspaceHttp flow; acoustic
+ * has no pairing bootstrap of its own yet, just a manual
+ * initiator/responder start. All four are UNTESTED on real hardware —
+ * see docs/Android.md.
  */
 class MainActivity : AppCompatActivity() {
     private val background: ExecutorService = Executors.newSingleThreadExecutor()
@@ -76,7 +83,9 @@ class MainActivity : AppCompatActivity() {
     private var bleTransport: BleTransport? = null
     private var wifiDirectTransport: WifiDirectTransport? = null
     private var wifiDirectReceiver: BroadcastReceiver? = null
+    private var acousticTransport: AcousticTransport? = null
     private lateinit var localState: LocalStateStore
+    private lateinit var engineState: LocalEngineStateStore
 
     // Current session, kept around so "Advertise via BLE"/"Write to NFC
     // tag" can mint a new pairing token without the user re-entering
@@ -100,6 +109,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var advertiseButton: Button
     private lateinit var nfcWriteButton: Button
     private lateinit var wifiDirectScanButton: Button
+    private lateinit var acousticInitiatorButton: Button
+    private lateinit var acousticResponderButton: Button
     private lateinit var statusText: TextView
     private lateinit var messageInput: EditText
     private lateinit var sendButton: Button
@@ -121,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         localState = LocalStateStore(applicationContext)
+        engineState = LocalEngineStateStore(applicationContext)
 
         serverUrlInput = findViewById(R.id.et_server_url)
         pairingCodeInput = findViewById(R.id.et_pairing_code)
@@ -131,6 +143,8 @@ class MainActivity : AppCompatActivity() {
         advertiseButton = findViewById(R.id.btn_advertise_ble)
         nfcWriteButton = findViewById(R.id.btn_nfc_write)
         wifiDirectScanButton = findViewById(R.id.btn_wifi_direct_scan)
+        acousticInitiatorButton = findViewById(R.id.btn_acoustic_initiator)
+        acousticResponderButton = findViewById(R.id.btn_acoustic_responder)
         statusText = findViewById(R.id.tv_status)
         messageInput = findViewById(R.id.et_message)
         sendButton = findViewById(R.id.btn_send)
@@ -143,6 +157,8 @@ class MainActivity : AppCompatActivity() {
         advertiseButton.setOnClickListener { withPermissions(blePermissions()) { onAdvertiseViaBleClicked() } }
         nfcWriteButton.setOnClickListener { onNfcWriteClicked() }
         wifiDirectScanButton.setOnClickListener { withPermissions(wifiDirectPermissions()) { startWifiDirectScan() } }
+        acousticInitiatorButton.setOnClickListener { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.MASTER) } }
+        acousticResponderButton.setOnClickListener { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.SLAVE) } }
 
         // A tag tap can cold-launch the Activity via the manifest's
         // NDEF_DISCOVERED filter — that intent arrives here, in
@@ -231,6 +247,7 @@ class MainActivity : AppCompatActivity() {
                 onObjectReceived = { obj, senderId ->
                     appendLog("Received from $senderId: ${obj.content}")
                 },
+                stateStore = engineState,
             ),
         )
         engine?.stop()
@@ -273,6 +290,8 @@ class MainActivity : AppCompatActivity() {
     /** Local-only cleanup: forgets this device's identity and session, does not revoke it server-side. */
     private fun onForgetClicked() {
         val currentEngine = engine
+        val workspaceId = currentWorkspaceId
+        val deviceId = currentIdentity?.deviceId
         engine = null
         currentIdentity = null
         currentServerUrl = null
@@ -280,6 +299,9 @@ class MainActivity : AppCompatActivity() {
         currentOwnerDeviceId = null
         currentWorkspaceKeyB64 = null
         localState.clear()
+        if (workspaceId != null && deviceId != null) {
+            engineState.clear(workspaceId, deviceId)
+        }
         pairingCodeInput.setText("")
         logText.text = ""
         setStatus("Forgot this device. Enter a fresh pairing code to join again.")
@@ -490,6 +512,36 @@ class MainActivity : AppCompatActivity() {
         background.execute { transport.start() }
     }
 
+    // --- Acoustic transport (near-ultrasonic, mic/speaker — see AcousticTransport.kt) ---
+
+    private fun acousticPermissions(): Array<String> = arrayOf(Manifest.permission.RECORD_AUDIO)
+
+    /**
+     * Starts the acoustic link with this device in the given role — see
+     * AcousticTransport's class doc comment for why the two sides must
+     * agree out of band on who is MASTER (initiator) and who is SLAVE
+     * (responder); there's no auto-negotiation. Two ScreenMesh devices
+     * within earshot, one tapping "Start Acoustic (Initiator)" and the
+     * other "Start Acoustic (Responder)", is the intended manual pairing
+     * for this experimental transport — it does not (yet) carry a
+     * pairing-code bootstrap the way BLE/NFC do.
+     */
+    private fun startAcousticLink(role: AcousticRole) {
+        var transport = acousticTransport
+        if (transport == null) {
+            transport = AcousticTransport(applicationContext)
+            acousticTransport = transport
+            transport.onMessage { data ->
+                appendLog("Acoustic: received ${data.size} bytes: ${String(data)}")
+            }
+            transport.onStatusChange { status ->
+                appendLog("Acoustic status: $status")
+            }
+        }
+        setStatus("Starting acoustic link as ${role.name.lowercase()} — this is slow (well under 1 kbps) and UNTESTED on real hardware.")
+        background.execute { transport.start(role) }
+    }
+
     private fun withPermissions(permissions: Array<String>, action: () -> Unit) {
         val granted = permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         if (granted) {
@@ -514,6 +566,7 @@ class MainActivity : AppCompatActivity() {
         bleTransport?.let { t -> background.execute { t.stop() } }
         wifiDirectTransport?.let { t -> background.execute { t.stop() } }
         wifiDirectReceiver?.let { runCatching { unregisterReceiver(it) } }
+        acousticTransport?.let { t -> background.execute { t.stop() } }
         background.shutdown()
     }
 }
