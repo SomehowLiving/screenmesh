@@ -134,6 +134,21 @@ type-checked via Gradle instead — see above).
 pnpm build
 ```
 
+## Run the unit tests
+
+```bash
+pnpm test
+```
+
+Runs every workspace package's vitest suite (`packages/crypto`,
+`packages/protocol` — 46 tests as of this writing): base64 round-trips,
+Ed25519/X25519 identity, AES-GCM encrypt/decrypt, the Double Ratchet
+(root key agreement, healing after one round trip, out-of-order delivery,
+replay rejection), envelope seal/verify/decrypt, and pairing-code
+encode/decode. No relay server or network access needed — these are pure
+unit tests. `apps/android` has a Kotlin-mirrored equivalent (45 tests) —
+see "Android: JVM unit tests" below.
+
 ## Run the automated smoke tests
 
 Requires `dev:server` running first (scripts hit `127.0.0.1:8787`).
@@ -162,34 +177,54 @@ Runs, in order:
    objects through the approval gate (non-interactive stand-in for the
    CLI's prompt).
 
+## Android: JVM unit tests (no device/emulator needed)
+
+Kotlin mirrors of `packages/crypto`/`packages/protocol`'s vitest suites —
+base64, identity, AES-GCM, the Double Ratchet (including out-of-order
+delivery and replay rejection), envelope seal/verify/decrypt, and
+pairing-code encode/decode. Runs straight on the JVM, no emulator needed
+(these files have no Android API dependency).
+
+```bash
+cd apps/android && ./gradlew testDebugUnitTest
+```
+
 ## Android: cross-language interop test (no device/emulator needed)
 
 Proves the Kotlin port actually speaks the same protocol as the
 TypeScript engine — see
 [docs/Android.md § Cross-language wire compatibility](docs/Android.md).
-The Kotlin side has no Android-API dependency, so it runs as a plain JVM
-program.
+One command runs both sides (starts the relay if one isn't already
+running, compiles the Kotlin module, assembles its plain-JVM classpath,
+and runs the TS and Kotlin sides against each other):
 
 ```bash
-# 1. dev:server running (repo root)
-
-# 2. Compile the Android module and print its plain-JVM runtime classpath
-cd apps/android && ./gradlew compileDebugKotlin printRuntimeClasspath
-
-# 3. Run the TypeScript side (repo root) — creates a workspace, writes a
-#    handoff file, waits for the Kotlin device, sends/receives a greeting
-pnpm exec tsx packages/sync/scripts/interop-with-android.ts /tmp/handoff.json
-
-# 4. Once it prints "handoff written", run the Kotlin side: the compiled
-#    classes dir (apps/android/app/build/tmp/kotlin-classes/debug) plus
-#    the non-Android .jar entries from step 2's classpath output
-#    (okhttp, okio, kotlin-stdlib*, kotlinx-serialization-*, bcprov,
-#    org.jetbrains:annotations), joined with the OS path separator:
-java -cp "<classes-dir>;<jar1>;<jar2>;..." com.screenmesh.InteropSmokeKt /tmp/handoff.json
+pnpm test:interop
 ```
 
 Both sides print a final `ANDROID INTEROP OK` / `KOTLIN INTEROP OK` on
-success.
+success. Under the hood (`apps/android/scripts/run-interop-test.mjs`):
+compile the Android module and print its plain-JVM runtime classpath via
+`./gradlew compileDebugKotlin printRuntimeClasspath`, run the TypeScript
+side (`packages/sync/scripts/interop-with-android.ts`) to create a
+workspace and write a handoff file, then run the Kotlin side
+(`com.screenmesh.InteropSmokeKt`) with a `java -cp` built from the
+compiled classes dir plus the non-Android `.jar` entries from the printed
+classpath (`.aar` entries are Android-packaging-only and unused by the
+plain-Kotlin protocol/crypto/transport/sync code this exercises).
+
+## Android: acoustic PHY loopback test (no device/emulator needed)
+
+Drives the real vendored acoustic modem's DSP core
+(`AcousticPhyLink.encode()`/`.ingest()` — OFDM/D-CSS modulation, preamble
+sync) through a simulated noisy channel and confirms round-trip byte
+correctness — see
+[docs/Android.md's acoustic transport section](docs/Android.md) for what
+this does and doesn't prove (no real microphone/speaker involved).
+
+```bash
+pnpm test:acoustic-loopback
+```
 
 ## Android: real-device / emulator testing
 

@@ -15,6 +15,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:interop": "node apps/android/scripts/run-interop-test.mjs",
+    "test:acoustic-loopback": "node apps/android/scripts/run-acoustic-loopback-test.mjs",
     "smoke": "tsx packages/crypto/scripts/ratchet-test.ts && tsx packages/sync/scripts/smoke.ts && tsx packages/sync/scripts/engine-smoke.ts && tsx apps/agent/scripts/agent-smoke.ts"
   },
   "devDependencies": {

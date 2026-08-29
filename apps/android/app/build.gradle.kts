@@ -61,6 +61,13 @@ dependencies {
     // API 33), so — like packages/crypto isolating Web Crypto behind an
     // interface — this isolates BouncyCastle behind Identity.kt/Ratchet.kt.
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
+    // Local (plain-JVM) unit tests under src/test — the crypto/protocol
+    // files here have no Android API dependency, so `testDebugUnitTest`
+    // runs them straight on the JVM, no emulator/device needed. Mirrors
+    // packages/crypto and packages/protocol's vitest suites test-for-test
+    // — see docs/Android.md.
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Prints the plain-JVM dependency classpath (one path per line), used to
@@ -69,8 +76,13 @@ dependencies {
 // instead of on a device/emulator. Only the non-Android-API files in this
 // module (protocol/crypto/transport/sync, not MainActivity or
 // transport/nearby/*) are exercised that way.
+// CLASSPATH_ENTRY: prefix makes each line trivially greppable out of the
+// rest of Gradle's console noise — apps/android/scripts/run-interop-test.mjs
+// parses exactly this format.
 tasks.register("printRuntimeClasspath") {
     doLast {
-        configurations.getByName("debugRuntimeClasspath").files.forEach { println(it.absolutePath) }
+        configurations.getByName("debugRuntimeClasspath").files.forEach {
+            println("CLASSPATH_ENTRY:${it.absolutePath}")
+        }
     }
 }

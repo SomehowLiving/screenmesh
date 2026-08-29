@@ -311,15 +311,14 @@ would fail this test — not just protocol-level bookkeeping. `AcousticPhyLink`
 calls `android.util.Log` directly (same as `AndroidAudioBackend`), which
 throws `Stub!` under the real `android.jar` on a plain JVM classpath, so
 running this needs a minimal same-package `android.util.Log` shim ahead
-of `android.jar` on the classpath — a JVM test-harness substitute only,
-not a change to app or vendored code:
+of it on the classpath — a JVM test-harness substitute only, not a change
+to app or vendored code. One command automates all of it (compile,
+generate and compile the shim, assemble the classpath, run):
 ```sh
-cd apps/android
-./gradlew compileDebugKotlin
-# write a trivial android/util/Log.java (v/d/i/w/e print to stdout) and
-# javac -d <shim-out> android/util/Log.java
-java -cp "<shim-out>;<classes-dir>;<kotlin-stdlib jar>" com.dweekly.cyrinxhil.AcousticLoopbackTestKt
+pnpm test:acoustic-loopback
 ```
+See `apps/android/scripts/run-acoustic-loopback-test.mjs` for exactly
+what it does under the hood.
 
 **What this does NOT prove**: real air. No emulator can hold a mic/speaker
 conversation with itself, and there's no second physical device in this
@@ -388,6 +387,24 @@ class-`private` property can't reach), and an Android lint error
 `ACCESS_COARSE_LOCATION` alongside it on API 31+ — `CoarseFineLocation`
 — fixed in `AndroidManifest.xml`).
 
+### Automated unit tests: crypto/protocol, mirrored from the TypeScript suite
+
+`./gradlew testDebugUnitTest` runs a real JUnit suite under
+`app/src/test/java` — Kotlin mirrors of `packages/crypto` and
+`packages/protocol`'s vitest suites, test-for-test: base64 round-trips,
+Ed25519/X25519 identity export/import, AES-GCM encrypt/decrypt (including
+wrong-key and tampered-ciphertext rejection), the Double Ratchet (root
+key agreement, healing after one round trip, out-of-order delivery via
+the skipped-key cache, and replay rejection), envelope seal/verify/decrypt
+(including signature tamper detection), and pairing-code encode/decode.
+45 tests, all passing, on the JVM — no emulator needed, since none of
+this touches `android.*`. This exists specifically to keep the two ports
+in sync automatically: before this, "byte-for-byte parity with the TS
+source" (this doc's opening risk) was only checked by eye plus the
+one-off interop run below: a regression introduced later in either port
+had nothing to catch it. Run it with `./gradlew testDebugUnitTest` from
+`apps/android`.
+
 ### Cross-language wire compatibility: confirmed
 
 The single biggest risk named throughout this doc — a subtly wrong
@@ -447,25 +464,17 @@ send/receive chain stepping (HMAC), envelope sealing/verification
 Every one of those was a named risk earlier in this doc; none of them
 were bugs.
 
-**To re-run this yourself:**
-```sh
-# 1. Start the relay server (repo root)
-pnpm --filter @screenmesh/server exec tsx src/index.ts
-
-# 2. Compile the Android module and get its plain-JVM runtime classpath
-cd apps/android
-./gradlew compileDebugKotlin printRuntimeClasspath
-
-# 3. Run the TS side (repo root), pointed at a scratch file
-pnpm exec tsx packages/sync/scripts/interop-with-android.ts /tmp/interop-handoff.json
-
-# 4. Once it prints "handoff written", run the Kotlin side with the
-#    compiled classes dir (app/build/tmp/kotlin-classes/debug) plus the
-#    non-Android .jar entries from step 2's classpath output
-#    (okhttp, okio, kotlin-stdlib*, kotlinx-serialization-*, bcprov,
-#    org.jetbrains:annotations) joined with the OS path separator:
-java -cp "<classes-dir>;<jar1>;<jar2>;..." com.screenmesh.InteropSmokeKt /tmp/interop-handoff.json
-```
+**To re-run this yourself:** one command from the repo root —
+`pnpm test:interop` — starts the relay (or reuses one already running),
+compiles the Android module, assembles the plain-JVM classpath, and runs
+both sides against each other. See
+`apps/android/scripts/run-interop-test.mjs` for what it automates (this
+used to be a four-step manual recipe: start the relay, compile and print
+the runtime classpath, run the TS side, then hand-filter the classpath
+down to the non-Android `.jar` entries to run the Kotlin side — automated
+here so it doesn't have to be reconstructed by hand each time). See
+COMMANDS.md for the equivalent for the acoustic PHY loopback test
+(`pnpm test:acoustic-loopback`).
 
 **What the JVM-only interop test does NOT prove:** the Activity/UI
 layer, BLE/Wi-Fi Direct/NFC (real radios, real GATT callback timing), and
