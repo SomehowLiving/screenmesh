@@ -26,11 +26,15 @@ import {
   TrashIcon,
 } from "./mesh-icons.js";
 
-const FILTERS: Array<{ value: string; label: string; types?: MeshObjectType[] }> = [
+const VIEW_FILTERS = [
   { value: "all", label: "All" },
   { value: "recent", label: "Recent" },
   { value: "pinned", label: "Pinned" },
   { value: "continue", label: "Continue later" },
+];
+
+const TYPE_FILTERS: Array<{ value: string; label: string; types?: MeshObjectType[] }> = [
+  { value: "all", label: "All types" },
   { value: "documents", label: "Documents", types: ["document"] },
   // These are user-facing content families, not a mirror of protocol enums.
   { value: "notes", label: "Notes", types: ["text", "clipboard"] },
@@ -112,7 +116,8 @@ function timeAgo(timestamp: number) {
 
 export function LibraryPanel(props: { db: ScreenMeshDb; me: LocalIdentity; engine: MeshEngine }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [view, setView] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const objects = useLiveQuery(() => props.db.objects.orderBy("updatedAt").reverse().toArray(), [props.db]) ?? [];
   const devices = useLiveQuery(() => props.db.devices.toArray(), [props.db]) ?? [];
@@ -122,15 +127,15 @@ export function LibraryPanel(props: { db: ScreenMeshDb; me: LocalIdentity; engin
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return objects.filter((object) => {
-      const contentFamily = FILTERS.find((item) => item.value === filter);
+      const contentFamily = TYPE_FILTERS.find((item) => item.value === typeFilter);
       if (contentFamily?.types && !contentFamily.types.includes(object.type)) return false;
       const local = stateByObject.get(object.id);
-      if (filter === "pinned" && !local?.pinned) return false;
-      if (filter === "continue" && !local?.continueLater) return false;
-      if (filter === "recent" && !local?.lastOpenedAt) return false;
+      if (view === "pinned" && !local?.pinned) return false;
+      if (view === "continue" && !local?.continueLater) return false;
+      if (view === "recent" && !local?.lastOpenedAt) return false;
       return !needle || `${nameFor(object)} ${previewFor(object)} ${(local?.tags ?? []).join(" ")}`.toLowerCase().includes(needle);
     });
-  }, [filter, objects, query, stateByObject]);
+  }, [objects, query, stateByObject, typeFilter, view]);
   const selected = objects.find((object) => object.id === selectedId) ?? null;
   const nameOf = (id: string) => id === props.me.deviceId ? "You" : devices.find((device) => device.id === id)?.name ?? "Unknown device";
 
@@ -145,10 +150,16 @@ export function LibraryPanel(props: { db: ScreenMeshDb; me: LocalIdentity; engin
         <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">{objects.length} {objects.length === 1 ? "object" : "objects"}</span>
       </div>
 
-      <div className="mt-5 flex flex-col gap-3 border-y border-border py-3 sm:flex-row sm:items-center">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your mesh…" className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring" />
-        <div className="flex max-w-full gap-1 overflow-x-auto pb-0.5 sm:flex-none">
-          {FILTERS.map((item) => <button key={item.value} type="button" onClick={() => setFilter(item.value)} className={`shrink-0 rounded-md px-2.5 py-1.5 text-xs transition-colors ${filter === item.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>{item.label}</button>)}
+      <div className="mt-5 space-y-3 border-y border-border py-3">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles, contents, and tags…" className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring sm:max-w-xl" />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex max-w-full gap-1 overflow-x-auto pb-0.5" aria-label="Library view">
+            {VIEW_FILTERS.map((item) => <button key={item.value} type="button" onClick={() => setView(item.value)} className={`shrink-0 rounded-md px-2.5 py-1.5 text-xs transition-colors ${view === item.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}>{item.label}</button>)}
+          </div>
+          <div className="flex items-center gap-2 sm:w-44">
+            <span className="shrink-0 text-[11px] text-muted-foreground">Type</span>
+            <SelectMenu className="min-w-0 flex-1" ariaLabel="Filter library by type" value={typeFilter} onValueChange={setTypeFilter} options={TYPE_FILTERS.map(({ value, label }) => ({ value, label }))} />
+          </div>
         </div>
       </div>
 

@@ -35,6 +35,7 @@ import {
   InboxIcon,
   LockIcon,
   MeshMark,
+  MoreIcon,
   MoonIcon,
   PlusIcon,
   SunIcon,
@@ -81,19 +82,28 @@ function ConnBadge(props: { transport: WebSocketRelayTransport }) {
 }
 
 function useTheme() {
+  type ThemePreference = "system" | "light" | "dark";
+  const [preference, setPreference] = useState<ThemePreference>(() => {
+    const saved = window.localStorage.getItem("screenmesh-theme");
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
   const [dark, setDark] = useState(false);
   useEffect(() => {
-    const saved = window.localStorage.getItem("screenmesh-theme");
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const shouldUseDark = saved ? saved === "dark" : prefersDark;
-    document.documentElement.classList.toggle("dark", shouldUseDark);
-    setDark(shouldUseDark);
-  }, []);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const shouldUseDark = preference === "system" ? media.matches : preference === "dark";
+      document.documentElement.classList.toggle("dark", shouldUseDark);
+      setDark(shouldUseDark);
+    };
+    apply();
+    if (preference !== "system") return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [preference]);
   const toggle = () => {
     const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
     window.localStorage.setItem("screenmesh-theme", next ? "dark" : "light");
+    setPreference(next ? "dark" : "light");
   };
   return { dark, toggle };
 }
@@ -299,7 +309,7 @@ export function App() {
         </div>
       )}
 
-      <MobileNavigation activeView={activeView} onNavigate={navigateWorkspace} />
+      <MobileNavigation activeView={activeView} onNavigate={navigateWorkspace} dark={dark} onToggleTheme={toggleTheme} />
 
       <div className="grid min-h-0 flex-1 md:grid-cols-[236px_minmax(0,1fr)] xl:grid-cols-[236px_minmax(0,1fr)_320px]">
         <Sidebar db={db} me={me} activeView={activeView} onNavigate={navigateWorkspace} />
@@ -499,8 +509,9 @@ function Sidebar(props: {
       <nav className="space-y-1">
         <NavItem active={props.activeView === "workspace"} icon={<InboxIcon />} label="Workspace" onClick={() => props.onNavigate("workspace")} />
         <NavItem active={props.activeView === "library"} icon={<ActivityIcon />} label="Library" onClick={() => props.onNavigate("library")} />
-        <NavItem active={props.activeView === "transfers"} icon={<ArrowUpIcon />} label="Transfers" onClick={() => props.onNavigate("transfers")} />
         <NavItem active={props.activeView === "devices"} icon={<DevicesIcon />} label="Devices" count={String(devices.length)} onClick={() => props.onNavigate("devices")} />
+        <p className="px-2 pb-1 pt-5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Inspect</p>
+        <NavItem active={props.activeView === "transfers"} icon={<ArrowUpIcon />} label="Transfers" onClick={() => props.onNavigate("transfers")} />
         <NavItem active={props.activeView === "mesh"} icon={<ActivityIcon />} label="Mesh" onClick={() => props.onNavigate("mesh")} />
         <NavItem active={props.activeView === "activity"} icon={<ActivityIcon />} label="Activity" onClick={() => props.onNavigate("activity")} />
         <NavItem active={props.activeView === "security"} icon={<LockIcon />} label="Security" onClick={() => props.onNavigate("security")} />
@@ -544,18 +555,26 @@ function Sidebar(props: {
   );
 }
 
-function MobileNavigation(props: { activeView: WorkspaceView; onNavigate: (view: WorkspaceView) => void }) {
+function MobileNavigation(props: { activeView: WorkspaceView; onNavigate: (view: WorkspaceView) => void; dark: boolean; onToggleTheme: () => void }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const inspectActive = props.activeView === "transfers" || props.activeView === "activity" || props.activeView === "mesh" || props.activeView === "security";
+  function choose(view: WorkspaceView) {
+    props.onNavigate(view);
+    setMoreOpen(false);
+  }
   return (
-    <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-card px-2 py-1.5 md:hidden" aria-label="Workspace navigation">
+    <nav className="relative flex shrink-0 gap-1 border-b border-border bg-card px-2 py-1.5 md:hidden" aria-label="Workspace navigation">
       <MobileNavItem active={props.activeView === "workspace"} icon={<InboxIcon />} label="Workspace" onClick={() => props.onNavigate("workspace")} />
       <MobileNavItem active={props.activeView === "library"} icon={<ActivityIcon />} label="Library" onClick={() => props.onNavigate("library")} />
-      <MobileNavItem active={props.activeView === "transfers"} icon={<ArrowUpIcon />} label="Transfers" onClick={() => props.onNavigate("transfers")} />
       <MobileNavItem active={props.activeView === "devices"} icon={<DevicesIcon />} label="Devices" onClick={() => props.onNavigate("devices")} />
-      <MobileNavItem active={props.activeView === "mesh"} icon={<ActivityIcon />} label="Mesh" onClick={() => props.onNavigate("mesh")} />
-      <MobileNavItem active={props.activeView === "activity"} icon={<ActivityIcon />} label="Activity" onClick={() => props.onNavigate("activity")} />
-      <MobileNavItem active={props.activeView === "security"} icon={<LockIcon />} label="Security" onClick={() => props.onNavigate("security")} />
+      <MobileNavItem active={inspectActive} icon={<MoreIcon />} label="More" onClick={() => setMoreOpen(true)} />
+      {moreOpen && <div className="fixed inset-0 z-50 flex items-end bg-foreground/20 p-0 backdrop-blur-[1px]" role="dialog" aria-modal="true" aria-label="Inspect navigation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}><div className="w-full rounded-t-2xl border border-border bg-background p-4 shadow-2xl"><div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-semibold">Inspect ScreenMesh</p><p className="mt-0.5 text-xs text-muted-foreground">Delivery, mesh, and security details.</p></div><div className="flex items-center gap-1"><Button size="icon" variant="ghost" aria-label={`Switch to ${props.dark ? "light" : "dark"} theme`} onClick={props.onToggleTheme}>{props.dark ? <SunIcon /> : <MoonIcon />}</Button><Button size="icon" variant="ghost" aria-label="Close menu" onClick={() => setMoreOpen(false)}><CloseIcon /></Button></div></div><div className="grid grid-cols-2 gap-2"><InspectOption icon={<ArrowUpIcon />} label="Transfers" detail="Delivery state" onClick={() => choose("transfers")} /><InspectOption icon={<ActivityIcon />} label="Activity" detail="What changed" onClick={() => choose("activity")} /><InspectOption icon={<ActivityIcon />} label="Mesh" detail="Routes and queue" onClick={() => choose("mesh")} /><InspectOption icon={<LockIcon />} label="Security" detail="Trust and encryption" onClick={() => choose("security")} /></div></div></div>}
     </nav>
   );
+}
+
+function InspectOption({ icon, label, detail, onClick }: { icon: React.ReactNode; label: string; detail: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className="flex items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-accent"><span className="grid size-8 place-items-center rounded-md bg-muted text-muted-foreground [&_svg]:size-4">{icon}</span><span><span className="block text-xs font-medium">{label}</span><span className="mt-0.5 block text-[10px] text-muted-foreground">{detail}</span></span></button>;
 }
 
 function MobileNavItem({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
