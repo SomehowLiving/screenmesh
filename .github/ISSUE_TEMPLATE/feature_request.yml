@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an improvement to the ScreenMesh experience.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Start with the moment of friction, not an implementation.
+      placeholder: I want to… but today I have to…
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe how it should feel for the person using ScreenMesh.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What do you do today? What trade-offs should we avoid?

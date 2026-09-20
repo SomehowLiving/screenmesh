@@ -1,0 +1,46 @@
+name: Bug report
+description: Tell us about behavior that does not match expectations.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include pairing links, QR codes, keys, tokens, real private payloads, or personal network addresses. For security issues, see SECURITY.md instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Safe reproduction steps
+      description: Use synthetic device names and content.
+      placeholder: |
+        1. Pair two test devices
+        2. Send a test note
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - Web workspace or library
+        - Pairing or devices
+        - Delivery or queueing
+        - Activity, mesh, or security view
+        - Desktop agent
+        - Android
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: App version/commit, browser or platform, and any relevant non-sensitive context.

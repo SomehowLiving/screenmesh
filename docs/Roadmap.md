@@ -75,6 +75,43 @@ Known limitation at the time, resolved in Phase 5: this shipped when all workspa
 
 `packages/sync/src/engine.ts` gained one general-purpose primitive along the way: `onObjectReceived`, a callback fired once every op in an incoming envelope has been applied (not mid-envelope) — needed because the Node agent has no Dexie liveQuery to react to new objects the way the web UI does.
 
+## Phase 6 â€” Real-world validation and hardening
+
+The capabilities below are implemented or have meaningful automated/emulator coverage. They are not production claims until they have been exercised under real radios, real browsers, and unfriendly networks.
+
+| Area | Existing implementation / coverage | Required real-world validation |
+| --- | --- | --- |
+| **Web PWA workflow** | Core UI, encrypted delivery, offline queues, typechecking, smoke coverage | Two actual devices: pairing, send/receive, mobile layout, Library, queue language, and recovery after interruption. |
+| **BLE pairing / short transport** | Android GATT central + peripheral, pairing-code flow, wired UI | Two physical Android phones: discovery, permissions, duplicate connection handling, reconnects, and short-message delivery. |
+| **Wi-Fi Direct transport** | Android `WifiP2pManager` discovery plus TCP transport, wired UI | Two physical Android phones: group-owner/client behavior, reconnects, throughput, and file delivery. |
+| **NFC tag pairing** | Android NDEF read/write helper and cold/warm intent paths | NFC-equipped phone plus real tag: write expiry, repeated tap behavior, app launch, and clear failure handling. |
+| **Acoustic transport** | Vendored Kotlin modem, loopback/noisy-channel test, wired Android transport | Two real phones in a real room: microphone/speaker response, echo, noise, distance, and practical pairing reliability. |
+| **Android product behavior** | APK build/lint, JVM tests, TypeScript/Kotlin interop, emulator join/send/receive/reconnect | Real device lifecycle, share sheet, rotation, battery/background constraints, and long-running delivery reliability. |
+| **Cross-browser / iOS PWA** | Primary implementation is browser-based; Chromium path is the main tested environment | Safari and Firefox: IndexedDB, camera/pairing, clipboard permissions, PWA install, mobile layout, and iPhone/iPad behavior. |
+| **Restrictive networks** | WebRTC direct path and encrypted relay fallback | Corporate firewall/NAT environments, direct-to-relay fallback timing, and decision on TURN deployment. |
+
+For every validation run, record both the technical result and the user-facing outcome: pairing time, delivery time, recovery without manual re-send, actual route/fallback, battery or permission impact, and whether the status was understood as delivered, queued safely, waiting, or needs approval.
+
+Recommended order:
+
+1. Daily PWA use on two real devices.
+2. Android QR + relay flow on two physical phones.
+3. BLE, Wi-Fi Direct, NFC, and acoustic paths one at a time.
+4. Safari/iOS and Firefox checks.
+5. Restrictive network and relay-fallback testing.
+
+## Phase 7 â€” Future transport and protocol research
+
+These are not commitments. They become roadmap work only when the existing paths are proven and a concrete user interaction justifies them.
+
+- Wi-Fi Aware for optional high-throughput Android device-to-device exchange.
+- Apple Multipeer / Network.framework for a polished native Apple path using the same ScreenMesh protocol.
+- UWB or Bluetooth Channel Sounding for **targeting** a nearby screen; payloads still use the best negotiated data route.
+- Screen-to-camera optical pairing for explicit, visible bootstrap on displays or shared machines.
+- Published one-time prekey bundles to improve the first-round-trip forward-secrecy story.
+- MLS-style group sessions if small-workspace pairwise sessions become a practical scaling constraint.
+- Capability verification/attestation; current capability advertisements remain self-reported routing hints, not a permission boundary.
+
 ## Explicitly not in the first version
 
 - Full Notion-style editor

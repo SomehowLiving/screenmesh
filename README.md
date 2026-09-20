@@ -1,164 +1,136 @@
 # ScreenMesh
 
-> **A local-first device handoff fabric that moves objects between your screens through any available connection.**
+> Your devices should feel like one private workspace.
 
-ScreenMesh lets you move notes, links, screenshots, files, clipboard items, and commands between your devices — phone, laptop, tablet, lab desktop, meeting-room display — **even when the devices are temporarily disconnected**. It is not a notes app with Bluetooth; it is a personal network connecting your screens, where content moves through whichever transport is currently available and stays queued when none exists.
+ScreenMesh is a local-first, end-to-end encrypted device mesh. Pair a phone, laptop, desktop, tablet, or display; then send useful things between them without emailing yourself, logging into a cloud account on a shared machine, or hoping every device is online at the same time.
 
-```text
-┌───────────────────────────────────────┐
-│ User interface                        │
-│ Notes, clipboard, files, device inbox │
-├───────────────────────────────────────┤
-│ Shared state                          │
-│ CRDT, local database, operation log   │
-├───────────────────────────────────────┤
-│ Routing and delivery                  │
-│ Discovery, queueing, acknowledgements │
-├───────────────────────────────────────┤
-│ Transport adapters                    │
-│ WebRTC, WebSocket, QR, Nearby, LAN    │
-└───────────────────────────────────────┘
+Send a link from your phone to your laptop. Continue a document on a different screen. Queue a file for a desktop that is asleep. Send a command to a trusted desktop agent for approval. ScreenMesh keeps the delivery mechanics in the background and lets the work stay in front.
+
+## Why it exists
+
+Temporary work is everywhere: a URL, a screenshot, a command, a copied error, a checklist, a file that needs to reach another screen. Today, moving it usually means picking a different app for every situation.
+
+ScreenMesh gives those handoffs one private place to go.
+
+```mermaid
+flowchart LR
+  Phone[Phone] -->|encrypted object| Mesh[ScreenMesh mesh]
+  Mesh --> Laptop[Laptop]
+  Mesh --> Tablet[Tablet]
+  Mesh --> Display[Display]
+  Mesh -->|no route yet| Queue[Encrypted local queue]
+  Queue -->|when a trusted route opens| Laptop
 ```
 
----
+## What you can do
 
-## The problem
+- Pair devices without an account using a QR code or pairing link.
+- Send text, documents, links, code, images, files, checklists, clipboard content, commands, and structured agent tasks.
+- Send to a specific device, everyone, or a device advertising a capability such as `terminal` or `browser`.
+- Keep working with objects after arrival: edit collaborative text/documents, update checklists, copy, download, open, pin, tag, and continue later.
+- Queue encrypted objects safely when a target is offline.
+- Inspect delivery, routing, device, and security state only when you need to understand what happened.
 
-People work across many devices, but moving *temporary* information between them is still fragmented: WhatsApp messages to yourself, emailing links, uploading files to Drive, logging into personal accounts on shared lab machines. These workflows suffer from:
+## Privacy in one minute
 
-- **Too many steps** — moving a URL from phone to laptop shouldn't require a chat app.
-- **Account dependency** — shared desktops, labs, and meeting rooms shouldn't need your cloud login.
-- **Internet dependency** — most tools stop working when one device disconnects or networks are restricted.
-- **No device-level addressing** — existing tools organize around documents, not *"send this to my laptop"*.
-- **Poor support for temporary information** — OTPs, error messages, commands, and debug logs don't need a permanent notes system.
+ScreenMesh is built for devices you trust.
 
-## The idea
+- Devices have local cryptographic identities; there is no required account.
+- Content is encrypted before it leaves the sender.
+- Relays can forward encrypted bytes, but are not meant to read object contents.
+- Paired devices use signed envelopes, replay protection, and forward-secret per-pair Double Ratchet sessions.
+- The workspace owner can revoke a paired device.
 
-ScreenMesh treats every connected device as a surface inside one personal workspace. Each device has an identity, a local inbox/outbox, a list of paired devices, and a synchronized workspace. The system never asks *"are these devices connected via Bluetooth?"* — it asks:
+Encryption protects content in transit and at the relay. It does not stop a trusted recipient from copying, downloading, photographing, or otherwise saving information they can view. See [FAQ.md](FAQ.md) and [docs/Security.md](docs/Security.md) for the full, honest model.
 
-> **What is the best available route between these devices right now?**
+## How delivery works
 
-That route could be local Wi-Fi, WebRTC, a WebSocket relay, Nearby Connections, a QR transfer — or *no route at all right now*, in which case the encrypted object waits in the outbox and is delivered when a route appears (possibly carried by another trusted device).
+ScreenMesh prefers the fastest useful route and falls back gracefully. A user should normally see only **Delivered**, **Queued safely**, or **Waiting for a device**.
 
-### Three operating modes
+```mermaid
+flowchart TD
+  Send[Send encrypted object] --> Direct{Direct peer route?}
+  Direct -->|yes| WebRTC[WebRTC direct]
+  Direct -->|no| Relay{Encrypted relay available?}
+  Relay -->|yes| RelaySend[Relay forwards ciphertext]
+  Relay -->|no| Nearby{Nearby route available?}
+  Nearby -->|yes| NearbySend[Nearby / native transport]
+  Nearby -->|no| Queue[Store encrypted bundle locally]
+  Queue --> Retry[Retry when a trusted route appears]
+  Retry --> Direct
+```
 
-| Mode | Condition | Path |
-|---|---|---|
-| **Instant** | Devices share internet or a network | WebRTC direct → WebSocket relay fallback |
-| **Nearby** | No internet, devices physically close | QR/NFC pairing → Nearby/Wi-Fi transfer |
-| **Eventual** | No usable route exists | Encrypted bundle → local outbox → later encounter or trusted relay |
+The deeper route reasoning remains available in Transfers, Activity, and Mesh rather than constantly taking over the interface.
 
-### Security model
+## Product surfaces
 
-ScreenMesh is an **end-to-end encrypted application-layer tunnel between trusted devices** — not a VPN, not a general TCP tunnel. Every device generates its own keypair; pairing (QR code) exchanges public keys and an ephemeral pairing token. Payloads are encrypted on the sender and decrypted on the recipient — relays only ever see ciphertext. Messages are signed, sequence-numbered, and expiring to prevent tampering and replay. See [docs/Security.md](docs/Security.md).
-
----
-
-## Core features (MVP)
-
-- **QR device pairing** — accountless, cross-platform, explicitly authorized. Temporary workspaces with expiry.
-- **Device dashboard & inbox** — see every paired device, its status and transport; every device has an inbox of received objects.
-- **Send to device** — text, links, code snippets, images, small files, checklists. Send to one device, several, all, or a currently-offline device.
-- **Delivery lifecycle** — `Created → Queued → Sending → Delivered → Opened → Acknowledged / Expired / Failed`, visible to the user.
-- **Offline-first** — IndexedDB local storage, operation log sync, CRDT merge (Yjs) on reconnect.
-- **Expiring objects** — after 10 minutes, after opening, when the workspace ends. Temporary by default.
-- **Command objects** — commands arrive as cards with *Copy / Open terminal / Save to history* actions. **Never auto-executed** in the MVP.
-- **Client-side encryption** — signed device messages, rotating workspace keys, device revocation.
-
-Explicit non-goals for v1: full Notion-style editor, AI features, automatic command execution, native apps for every platform, permanent file storage, social collaboration. See [docs/Roadmap.md](docs/Roadmap.md).
-
-## First target users: developers
-
-Send a command from documentation on your phone straight to your laptop. Throw a screenshot and device logs from a test phone to your editor. Pair with a lab machine for one session — send it a repo URL, a config file, a snippet — without signing into anything personal, and let the workspace expire when you leave.
-
----
+| Surface | What it is for |
+| --- | --- |
+| **Workspace** | Send objects and handle active work. |
+| **Library** | Search the private archive; use recents, pins, tags, and “continue later.” |
+| **Devices** | See paired devices, trust, status, and capabilities. |
+| **Inspect** | Transfers, Activity, Mesh, and Security—detail when you need it. |
 
 ## Repository layout
 
 ```text
-ScreenMesh/
-├── apps/
-│   ├── web/            # PWA — React + TypeScript + Vite, service worker, IndexedDB
-│   ├── server/         # Fastify relay — WebSocket signaling + encrypted store-and-forward
-│   └── agent/          # Desktop agent CLI — approval-gated command/agent-task execution
-├── packages/
-│   ├── protocol/       # Shared types: objects, envelopes, operations, delivery bundles
-│   ├── crypto/         # Device identity, pairing, Double Ratchet, payload encryption
-│   ├── transport/      # MeshTransport interface + WebRTC / WebSocket / QR adapters
-│   ├── sync/           # Operation log, CRDT integration, delivery & routing, outbox
-│   └── storage/        # Dexie/IndexedDB persistence layer
-├── docs/
-│   ├── Architecture.md # Layered architecture, data flow, sync & delivery design
-│   ├── Security.md     # Identity, pairing, E2EE, Double Ratchet, threat model
-│   ├── Transports.md   # Transport adapters, negotiation, future transports
-│   └── Roadmap.md      # MVP scope, phases, explicit non-goals
-├── IDEA.md             # Original product concept
-├── Techncial.md        # Transport & connectivity research
-└── FUTURE.md           # Secure-channel vision: device bus, capability routing
+apps/
+  web/       React PWA and local-first workspace UI
+  server/    Fastify relay, pairing API, encrypted store-and-forward
+  agent/     Approval-gated desktop command and task agent
+  android/   Native Android implementation
+packages/
+  protocol/  Shared object, operation, and envelope types
+  crypto/    Identity, ratchet sessions, encryption, signatures
+  transport/ WebRTC, relay, and transport abstractions
+  sync/      Object sync, delivery, queues, and CRDT integration
+  storage/   IndexedDB/Dexie persistence
+docs/        Architecture, security, transport, and roadmap details
 ```
 
-## Getting started
+## Run it locally
 
-Requirements: **Node.js ≥ 20** and **pnpm ≥ 9**.
+Requirements: Node.js 20+ and pnpm 9+.
 
 ```bash
 pnpm install
 
-# Run the signaling/relay server (ws://localhost:8787)
+# Terminal 1: relay and pairing API
 pnpm dev:server
 
-# Run the PWA (http://localhost:5173)
+# Terminal 2: web app
 pnpm dev:web
 
-# Type-check everything
+# Validate the repository
 pnpm typecheck
-
-# End-to-end smoke tests (relay must be running)
 pnpm smoke
 ```
 
-The dev server listens on all interfaces over **HTTPS** (self-signed — Web Crypto requires a secure context) and proxies the relay same-origin under `/api`, so one URL serves the page, the pairing API, and the WebSocket.
+The web development server is served over HTTPS because browser cryptography requires a secure context. For a second local “device,” open the web app with `?device=2` in another browser window.
 
-### Desktop agent (command execution)
+## Desktop agent
 
-A browser tab can't spawn a shell, so approval-gated command execution runs as a separate local process, reusing the exact same crypto/sync/transport packages as the PWA:
+The browser cannot execute shell commands. The optional desktop agent is a separate local process that uses the same protocol, crypto, sync, and transport packages as the web app.
 
 ```bash
-# Pair it — grab a "Copy join link" from the web app's pairing panel first
 pnpm --filter @screenmesh/agent dev -- --join "<join-link>" --name "My Desktop"
-
-# Later runs resume the saved session automatically
-pnpm --filter @screenmesh/agent dev
 ```
 
-It advertises the `terminal` capability, so the web app's Send panel can route straight to it ("Route to device with this capability"). Send it a `command` or `agent_task` object and it will print what's being asked and wait for your `[R]un` before executing anything — see [docs/Security.md](docs/Security.md#8-command-safety).
+It advertises a terminal capability. Command and agent-task objects always wait for explicit local approval before execution.
 
-**Pairing a phone:** start both dev servers, open `https://localhost:5173` on the laptop, and create a workspace. The QR/join link automatically points at your machine's **LAN IP** (the server reports it via `/api/info`) — scan it with the phone's camera. The phone shows a certificate warning once (self-signed dev cert): tap *Advanced → Proceed*, name the device, and it joins. Both devices must be on the same Wi-Fi, and Windows Firewall must allow Node on ports 5173/8787 (allow the prompt on first run).
+## Read next
 
-**Two "devices" on one machine:** open `https://localhost:5173` in one window and `https://localhost:5173/?device=2` in another — the `device` query parameter gives it a separate local identity/database. Paste the join link into the second window's *Join a workspace* box.
+- [FAQ](FAQ.md) — product, privacy, and everyday-use questions
+- [Product idea](IDEA.md) — the problem, product principles, and experience
+- [Future](FUTURE.md) — deliberate product and protocol directions
+- [Architecture](docs/Architecture.md) — system design
+- [Security](docs/Security.md) — identities, encryption, and threat model
+- [Roadmap](docs/Roadmap.md) — shipped work and technical roadmap
 
-## Tech stack
+## Contributing and security
 
-| Layer | Choice |
-|---|---|
-| Frontend | React, TypeScript, Vite, PWA (service worker + manifest) |
-| Local persistence | IndexedDB via Dexie, Yjs document updates, encrypted object cache |
-| Sync | Yjs (CRDT), custom operation log, offline delivery queue |
-| Transports | WebRTC data channels, WebSocket relay, QR pairing/transfer |
-| Backend | Fastify (WebSocket signaling + relay), later PostgreSQL/Redis/coturn |
-| Crypto | Web Crypto API — Ed25519 signatures, X25519 key agreement, AES-GCM payloads |
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, design principles, and safe reporting practices.
 
-## Documentation
+If you believe you found a security vulnerability, do not post secrets or exploit details publicly; follow [SECURITY.md](SECURITY.md).
 
-- [Architecture](docs/Architecture.md) — the four layers, operation log, CRDT sync, store–carry–forward delivery
-- [Security](docs/Security.md) — device identity, pairing, envelope format, replay protection, what ScreenMesh is *not*
-- [Transports](docs/Transports.md) — adapter interface, negotiation priority, current and future transports
-- [Roadmap](docs/Roadmap.md) — MVP scope and the phased path to a secure personal device bus
-
-## Positioning
-
-> **One-liner:** ScreenMesh lets you move notes, links, screenshots, files, and clipboard items between your devices, even when the devices are temporarily disconnected.
->
-> **Technical:** A local-first, transport-independent device handoff layer that synchronizes encrypted objects across browsers, phones, laptops, and shared screens.
->
-> **Vision:** Every screen around you becomes part of one programmable personal workspace. Information moves to the screen where it is needed, through the best available route — a secure, local-first communication fabric for a user's devices.
+ScreenMesh is licensed under the [Apache License 2.0](LICENSE).
