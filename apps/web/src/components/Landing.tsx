@@ -34,18 +34,22 @@ export function LandingView(props: {
             This node becomes the owner and can admit others via QR handshake or link.
           </p>
           <input
+            className="channel-name-input"
             type="text"
             value={workspaceName}
             onChange={(e) => setWorkspaceName(e.target.value)}
           />
-          <Select
-            ariaLabel="Channel expiration"
-            value={ttlIndex}
-            onChange={setTtlIndex}
-            options={TTL_CHOICES.map((choice, i) => ({ value: i, label: choice.label }))}
-          />
+          <div className="ttl-row">
+            <span>AUTO-EXPIRY</span>
+            <Select
+              ariaLabel="Channel expiration"
+              value={ttlIndex}
+              onChange={setTtlIndex}
+              options={TTL_CHOICES.map((choice, i) => ({ value: i, label: choice.label }))}
+            />
+          </div>
           <button
-            className="btn-primary"
+            className="btn-primary btn-large"
             disabled={busy || !workspaceName.trim()}
             onClick={async () => {
               setBusy(true);
@@ -73,7 +77,7 @@ export function LandingView(props: {
             onChange={(e) => setJoinCode(e.target.value)}
           />
           <button
-            className="ghost"
+            className="ghost btn-large"
             disabled={!joinCode.trim()}
             onClick={() => {
               try {

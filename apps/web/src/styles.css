@@ -8,10 +8,10 @@
   --border-bright: #235247;
   --text: #d8e8e3;
   --muted: #6d8981;
-  --accent: #38f6c4;
+  --accent: #39ff6a;
   --accent-2: #36ff9a;
-  --accent-dim: #16745e;
-  --ok: #39ff9a;
+  --accent-dim: #1a8f3f;
+  --ok: #39ff6a;
   --warn: #ffc857;
   --bad: #ff5666;
   --cyan: #57d7ff;
@@ -146,7 +146,7 @@ button { cursor: pointer; }
   display: grid;
   place-items: center;
   color: var(--accent);
-  box-shadow: inset 0 0 16px rgba(56, 246, 196, .08);
+  box-shadow: inset 0 0 16px rgba(57, 255, 106, .08);
 }
 
 .brand-name {
@@ -472,19 +472,19 @@ button { cursor: pointer; }
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(56,246,196,.11);
+  border: 1px solid rgba(57, 255, 106,.11);
   border-radius: 50%;
   box-shadow:
-    0 0 0 42px rgba(56,246,196,.025),
-    0 0 0 84px rgba(56,246,196,.018),
-    0 0 90px rgba(56,246,196,.05);
+    0 0 0 42px rgba(57, 255, 106,.025),
+    0 0 0 84px rgba(57, 255, 106,.018),
+    0 0 90px rgba(57, 255, 106,.05);
 }
 
 .mesh-rings::after {
   content: "";
   position: absolute;
   inset: 20%;
-  border: 1px dashed rgba(56,246,196,.12);
+  border: 1px dashed rgba(57, 255, 106,.12);
   border-radius: 50%;
 }
 
@@ -495,14 +495,14 @@ button { cursor: pointer; }
   width: 148px;
   height: 148px;
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(56,246,196,.75);
+  border: 1px solid rgba(57, 255, 106,.75);
   border-radius: 50%;
   background:
-    radial-gradient(circle at 45% 38%, rgba(56,246,196,.17), transparent 60%),
+    radial-gradient(circle at 45% 38%, rgba(57, 255, 106,.17), transparent 60%),
     #071512;
   box-shadow:
-    inset 0 0 35px rgba(56,246,196,.09),
-    0 0 35px rgba(56,246,196,.12);
+    inset 0 0 35px rgba(57, 255, 106,.09),
+    0 0 35px rgba(57, 255, 106,.12);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -515,7 +515,7 @@ button { cursor: pointer; }
   content: "";
   position: absolute;
   inset: 10px;
-  border: 1px dotted rgba(56,246,196,.25);
+  border: 1px dotted rgba(57, 255, 106,.25);
   border-radius: 50%;
 }
 
@@ -581,7 +581,7 @@ button { cursor: pointer; }
 }
 
 .mesh-node.online .node-card {
-  border-color: rgba(56,246,196,.45);
+  border-color: rgba(57, 255, 106,.45);
 }
 
 .mesh-node.offline .node-card {
@@ -830,7 +830,7 @@ input[type="text"]:focus,
 textarea:focus,
 select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(56,246,196,.14);
+  box-shadow: 0 0 0 1px rgba(57, 255, 106,.14);
 }
 
 textarea { resize: vertical; }
@@ -863,7 +863,7 @@ button.ghost {
 
 button.ghost:hover:not(:disabled) {
   color: var(--text);
-  background: rgba(56,246,196,.05);
+  background: rgba(57, 255, 106,.05);
 }
 
 .actions {
@@ -976,12 +976,12 @@ li.row {
   overflow: auto;
   border: 1px solid var(--border-bright);
   background:
-    radial-gradient(circle at 15% 10%, rgba(56,246,196,.06), transparent 40%),
+    radial-gradient(circle at 15% 10%, rgba(57, 255, 106,.06), transparent 40%),
     #050b09;
   box-shadow:
     0 0 0 1px rgba(0,0,0,.9),
     0 20px 90px rgba(0,0,0,.8),
-    0 0 45px rgba(56,246,196,.07);
+    0 0 45px rgba(57, 255, 106,.07);
 }
 
 .modal-head {
@@ -1034,7 +1034,7 @@ li.row {
 .pair-tab.active {
   color: var(--accent);
   border-color: var(--accent-dim);
-  background: rgba(56,246,196,.035);
+  background: rgba(57, 255, 106,.035);
 }
 
 .pair-main {
@@ -1050,7 +1050,7 @@ li.row {
   padding: 10px;
   display: grid;
   place-items: center;
-  box-shadow: 0 0 35px rgba(56,246,196,.06);
+  box-shadow: 0 0 35px rgba(57, 255, 106,.06);
 }
 
 .qr-frame canvas {
@@ -1238,7 +1238,7 @@ h1 {
   font-weight: 700;
   font-size: 1.4rem;
   color: var(--accent);
-  text-shadow: 0 0 12px rgba(56, 246, 196, 0.35);
+  text-shadow: 0 0 12px rgba(57, 255, 106, 0.35);
   margin: 0;
 }
 
@@ -1280,6 +1280,44 @@ h1::before { content: "// "; color: var(--muted); text-shadow: none; }
   color: var(--muted);
   font-size: 9px;
   margin-left: 15px;
+}
+
+/* Landing screen: make the two channel actions read as choices, not a
+ * settings form. The workspace-name field drops its input-box chrome to
+ * feel like an editable title; expiry becomes a small inline secondary
+ * setting instead of a full-width field; the primary action gets real
+ * visual weight so it, not the inputs, is what draws the eye. */
+.channel-name-input {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border-bright) !important;
+  padding: 4px 0 !important;
+  font-size: 1.05rem !important;
+  color: var(--text);
+}
+
+.channel-name-input:focus {
+  border-bottom-color: var(--accent) !important;
+  box-shadow: none !important;
+}
+
+.ttl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ttl-row span {
+  flex: none;
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.btn-large {
+  padding: 12px 16px;
+  font-size: 11px;
+  margin-top: 4px;
 }
 
 .grid {
@@ -1448,7 +1486,7 @@ label.check { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; 
 
 .sm-select.open .sm-select-trigger {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(56, 246, 196, 0.14);
+  box-shadow: 0 0 0 1px rgba(57, 255, 106, 0.14);
 }
 
 .sm-select-trigger:disabled { opacity: 0.4; }
@@ -1474,7 +1512,7 @@ label.check { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; 
   padding: 4px;
   background: #04100d;
   border: 1px solid var(--accent-dim);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(56, 246, 196, 0.06);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(57, 255, 106, 0.06);
 }
 
 .sm-select-option {
@@ -1485,13 +1523,13 @@ label.check { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; 
 }
 
 .sm-select-option:hover {
-  background: rgba(56, 246, 196, 0.08);
+  background: rgba(57, 255, 106, 0.08);
   color: var(--text);
 }
 
 .sm-select-option.selected {
   color: var(--accent);
-  background: rgba(56, 246, 196, 0.06);
+  background: rgba(57, 255, 106, 0.06);
 }
 
 /* Custom checkbox — appearance:none + a drawn check, no OS glyph. */
@@ -1513,7 +1551,7 @@ input[type="checkbox"]:hover { border-color: var(--accent-dim); }
 
 input[type="checkbox"]:checked {
   border-color: var(--accent);
-  background: rgba(56, 246, 196, 0.08);
+  background: rgba(57, 255, 106, 0.08);
 }
 
 input[type="checkbox"]:checked::after {
@@ -1546,11 +1584,11 @@ textarea:focus-visible {
  * every non-primary action looking the same. */
 .btn-primary {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(56, 246, 196, 0.12), 0 0 18px rgba(56, 246, 196, 0.08);
+  box-shadow: 0 0 0 1px rgba(57, 255, 106, 0.12), 0 0 18px rgba(57, 255, 106, 0.08);
 }
 
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 0 0 1px var(--accent), 0 0 26px rgba(56, 246, 196, 0.22);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 26px rgba(57, 255, 106, 0.22);
 }
 
 .btn-tertiary {
@@ -1572,7 +1610,7 @@ textarea:focus-visible {
 .nav-item svg { opacity: 0.75; transition: opacity 0.12s ease; }
 .nav-item:hover svg,
 .nav-item.active svg { opacity: 1; }
-.nav-item.active svg { filter: drop-shadow(0 0 4px rgba(56, 246, 196, 0.5)); }
+.nav-item.active svg { filter: drop-shadow(0 0 4px rgba(57, 255, 106, 0.5)); }
 
 /* Local-network origin presented as a plain-language label, not a raw
  * dev URL — the functional URL is still what's actually copied/embedded

@@ -21,16 +21,7 @@ import { DevicesPanel } from "./components/Devices.js";
 import { SendPanel } from "./components/Send.js";
 import { InboxPanel } from "./components/Inbox.js";
 import { SentPanel } from "./components/Sent.js";
-import {
-  DeviceIcon,
-  InboxIcon,
-  KeyIcon,
-  MeshIcon,
-  PairIcon,
-  RouteIcon,
-  SendIcon,
-  SettingsIcon,
-} from "./components/ui/Icons.js";
+import { InboxIcon, MeshIcon, PairIcon, RouteIcon, SendIcon } from "./components/ui/Icons.js";
 
 const STATUS_LABEL: Record<TransportStatus, string> = {
   idle: "IDLE",
@@ -207,26 +198,17 @@ export function App() {
           <button className="nav-item active" onClick={() => scrollTo("mesh")}>
             <MeshIcon /> Mesh
           </button>
-          <button className="nav-item" onClick={() => scrollTo("mesh")}>
-            <DeviceIcon /> Devices
-          </button>
           <button className="nav-item" onClick={() => scrollTo("activity")}>
             <InboxIcon /> Inbox
           </button>
           <button className="nav-item" onClick={() => scrollTo("send")}>
             <SendIcon /> Send
           </button>
+          <button className="nav-item" onClick={() => scrollTo("sent")}>
+            <RouteIcon /> Transmissions
+          </button>
           <button className="nav-item" onClick={() => setPairOpen(true)}>
             <PairIcon /> Pair Device
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("log")}>
-            <RouteIcon /> Routes
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("mesh")}>
-            <KeyIcon /> Keys
-          </button>
-          <button className="nav-item" onClick={() => scrollTo("log")}>
-            <SettingsIcon /> Settings
           </button>
         </nav>
 
