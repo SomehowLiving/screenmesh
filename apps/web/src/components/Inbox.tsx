@@ -227,10 +227,10 @@ export function InboxPanel(props: {
   }
 
   if (objects.length === 0) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">Nothing here yet.</p>;
+    return <p className="py-6 text-center text-sm text-muted-foreground">Nothing here yet.</p>;
   }
   if (visible.length === 0) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">No {props.filter.toLowerCase()} yet.</p>;
+    return <p className="py-6 text-center text-sm text-muted-foreground">No {props.filter.toLowerCase()} yet.</p>;
   }
 
   return (
@@ -250,7 +250,7 @@ export function InboxPanel(props: {
         const editing = editingId === object.id;
 
         return (
-          <article key={object.id} id={`obj-${object.id}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 py-5">
+          <article key={object.id} id={`obj-${object.id}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 py-4">
             <div className="grid size-7 place-items-center rounded-md border border-border bg-card [&_svg]:size-3.5">
               {typeIcon(object.type)}
             </div>

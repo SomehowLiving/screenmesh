@@ -39,13 +39,13 @@ export function SentPanel(props: { db: ScreenMeshDb; me: LocalIdentity }) {
   const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "unknown device";
 
   if (deliveries.length === 0) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">Nothing sent yet.</p>;
+    return <p className="py-6 text-center text-sm text-muted-foreground">Nothing sent yet.</p>;
   }
 
   return (
     <div className="divide-y divide-border">
       {deliveries.map((delivery) => (
-        <article key={delivery.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 py-5">
+        <article key={delivery.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 py-4">
           <div className="grid size-7 place-items-center rounded-md border border-border bg-card [&_svg]:size-3.5">
             <ArrowUpIcon />
           </div>

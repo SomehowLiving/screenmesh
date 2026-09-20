@@ -44,7 +44,7 @@ const STATUS_LABEL: Record<TransportStatus, string> = {
   error: "Connection error",
 };
 
-const FEED_TABS = ["All objects", "Sent", "Text", "Link", "Code", "Command", "Checklist"];
+const FEED_FILTERS = ["All objects", "Sent", "Text", "Link", "Code", "Command", "Checklist"];
 
 function ConnBadge(props: { transport: WebSocketRelayTransport }) {
   const [status, setStatus] = useState<TransportStatus>(
@@ -252,42 +252,44 @@ export function App() {
       <div className="grid min-h-[calc(100vh-3.5rem)] md:grid-cols-[208px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,1fr)_320px]">
         <Sidebar db={db} me={me} />
 
-        <main className="min-w-0 px-4 py-6 md:px-7 lg:px-10">
+        <main className="min-w-0 px-4 py-5 md:px-6 lg:px-8">
           <div className="mx-auto max-w-3xl">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-semibold">Workspace</h1>
-                <p className="mt-1 text-xs text-muted-foreground">Temporary objects shared across your mesh.</p>
-              </div>
-            </div>
+            <h1 className="text-lg font-semibold">Workspace</h1>
+            <p className="text-xs text-muted-foreground">Temporary objects shared across your mesh.</p>
 
-            <div className="mt-6">
+            <div className="mt-4">
               <SendPanel db={db} me={me} engine={session.engine} />
             </div>
 
-            <div className="mt-7 flex items-center gap-1 overflow-x-auto border-b border-border">
-              {FEED_TABS.map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setFeedFilter(tab)}
-                  className={`shrink-0 border-b px-3 py-2 text-xs ${feedFilter === tab ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            <div className="mt-4 overflow-hidden rounded-lg border border-border">
+              <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
+                <span className="text-xs font-medium text-foreground">Objects</span>
+                <select
+                  aria-label="Filter objects"
+                  value={feedFilter}
+                  onChange={(e) => setFeedFilter(e.target.value)}
+                  className="h-7 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
                 >
-                  {tab}
-                </button>
-              ))}
+                  {FEED_FILTERS.map((filter) => (
+                    <option key={filter} value={filter}>
+                      {filter}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="px-3">
+                {feedFilter === "Sent" ? (
+                  <SentPanel db={db} me={me} />
+                ) : (
+                  <InboxPanel db={db} me={me} engine={session.engine} filter={feedFilter} />
+                )}
+              </div>
             </div>
 
-            {feedFilter === "Sent" ? (
-              <SentPanel db={db} me={me} />
-            ) : (
-              <InboxPanel db={db} me={me} engine={session.engine} filter={feedFilter} />
-            )}
-
-            <section id="devices" className="mt-10 border-t border-border pt-8">
+            <section id="devices" className="mt-8 border-t border-border pt-6">
               <h2 className="text-sm font-semibold">Devices</h2>
-              <p className="mt-1 text-xs text-muted-foreground">Every device paired into this workspace.</p>
-              <div className="mt-4">
+              <p className="text-xs text-muted-foreground">Every device paired into this workspace.</p>
+              <div className="mt-3">
                 <DevicesPanel
                   db={db}
                   me={me}
@@ -353,10 +355,10 @@ function Sidebar(props: { db: ScreenMeshDb; me: LocalIdentity }) {
         <NavItem icon={<DevicesIcon />} label="Devices" count={String(devices.length)} onClick={() => scrollTo("devices")} />
         <NavItem icon={<ActivityIcon />} label="Activity" />
       </nav>
-      <div className="mt-7 px-2 text-[10px] font-medium uppercase text-muted-foreground">
+      <div className="mt-5 px-2 text-[10px] font-medium uppercase text-muted-foreground">
         Devices ({online} online)
       </div>
-      <div className="mt-2 space-y-0.5">
+      <div className="mt-1.5 space-y-0.5">
         {others.length === 0 ? (
           <p className="px-2 text-[11px] text-muted-foreground">No other devices paired yet.</p>
         ) : (
@@ -403,7 +405,7 @@ function RightRail(props: { db: ScreenMeshDb; me: LocalIdentity }) {
   const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "an offline device";
 
   return (
-    <aside className="hidden border-l border-border p-5 xl:block">
+    <aside className="hidden border-l border-border p-4 xl:block">
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-semibold">Delivery queue</h2>
         {carried.length > 0 && (
@@ -413,16 +415,16 @@ function RightRail(props: { db: ScreenMeshDb; me: LocalIdentity }) {
         )}
       </div>
       {carried.length === 0 ? (
-        <p className="mt-3 text-[11px] text-muted-foreground">Nothing queued right now.</p>
+        <p className="mt-2 text-[11px] text-muted-foreground">Nothing queued right now.</p>
       ) : (
-        <div className="mt-3 space-y-3">
+        <div className="mt-2 space-y-2">
           {carried.map((bundle) => (
-            <div key={bundle.bundleId} className="rounded-md border border-border bg-card p-3">
+            <div key={bundle.bundleId} className="rounded-md border border-border bg-card p-2.5">
               <div className="flex items-center gap-2 text-[10px]">
                 <LockIcon className="size-3.5" />
                 <span>Encrypted bundle for {nameOf(bundle.destinationDeviceId)}</span>
               </div>
-              <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+              <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
                 Will deliver automatically when a trusted route becomes available.
               </p>
             </div>
@@ -430,19 +432,19 @@ function RightRail(props: { db: ScreenMeshDb; me: LocalIdentity }) {
         </div>
       )}
 
-      <div className="mt-8 border-t border-border pt-4">
+      <div className="mt-5 border-t border-border pt-3">
         <h2 className="text-xs font-semibold">Transport priority</h2>
-        <p className="mt-2 text-[10px] leading-5 text-muted-foreground">
+        <p className="mt-1.5 text-[10px] leading-5 text-muted-foreground">
           Direct WebRTC is tried first, falling back to the encrypted relay when peers can't
           connect directly, with local operations queued until a route opens.
         </p>
       </div>
 
-      <div className="mt-8 border-t border-border pt-4">
+      <div className="mt-5 border-t border-border pt-3">
         <div className="flex items-center gap-2 text-[11px] font-medium">
           <LockIcon className="size-4" /> End-to-end encrypted
         </div>
-        <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
           Keys never leave your devices. Relays can route objects, but cannot read them.
         </p>
       </div>

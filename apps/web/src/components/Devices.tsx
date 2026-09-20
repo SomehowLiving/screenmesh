@@ -68,20 +68,18 @@ export function DevicesPanel(props: {
   const online = devices.filter((d) => d.status === "online");
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">{online.length} online · {devices.length} paired</p>
-      </div>
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{online.length} online · {devices.length} paired</p>
 
       {devices.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">
+        <p className="py-6 text-center text-sm text-muted-foreground">
           No devices paired yet — use "Pair device" to add one.
         </p>
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
           {devices.map((device) => (
-            <div key={device.id} className="flex items-center gap-3 rounded-md border border-border bg-card p-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border bg-background">
+            <div key={device.id} className="flex items-center gap-2.5 rounded-md border border-border bg-card p-2.5">
+              <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border bg-background">
                 <DevicesIcon className="size-4 text-muted-foreground" />
               </span>
               <div className="min-w-0 flex-1">
@@ -104,12 +102,12 @@ export function DevicesPanel(props: {
         </div>
       )}
 
-      <div className="rounded-md border border-border bg-card p-4">
+      <div className="rounded-md border border-border bg-card p-3">
         <p className="text-sm font-medium">This device's capabilities</p>
         <p className="mt-1 text-xs text-muted-foreground">
           Lets others route a send to "whichever device has X" instead of naming this device directly.
         </p>
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+        <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">
           {CAPABILITY_CHOICES.map((cap) => (
             <label key={cap} className="flex items-center gap-1.5 text-sm">
               <input
