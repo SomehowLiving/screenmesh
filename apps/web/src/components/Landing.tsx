@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "./ui/button.js";
+import { SelectMenu } from "./ui/select-menu.js";
 import { MeshMark } from "./mesh-icons.js";
 
 const TTL_CHOICES: Array<{ label: string; ms?: number }> = [
@@ -53,18 +54,13 @@ export function LandingView(props: {
               />
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-muted-foreground">Expires</span>
-                <select
-                  aria-label="Workspace expiration"
-                  value={ttlIndex}
-                  onChange={(e) => setTtlIndex(Number(e.target.value))}
-                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {TTL_CHOICES.map((choice, i) => (
-                    <option key={choice.label} value={i}>
-                      {choice.label}
-                    </option>
-                  ))}
-                </select>
+                <SelectMenu
+                  className="flex-1"
+                  ariaLabel="Workspace expiration"
+                  value={String(ttlIndex)}
+                  onValueChange={(value) => setTtlIndex(Number(value))}
+                  options={TTL_CHOICES.map((choice, index) => ({ value: String(index), label: choice.label }))}
+                />
               </div>
               <Button
                 className="w-full"

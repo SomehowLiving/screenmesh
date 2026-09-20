@@ -97,7 +97,9 @@
   }
 
   body {
-    background-color: var(--color-background);
+    background:
+      radial-gradient(circle at 50% -30%, oklch(1 0 0 / 72%), transparent 46%),
+      var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
     letter-spacing: 0;
@@ -106,6 +108,13 @@
   }
 
   button, input, textarea, select { font: inherit; }
+
+  button, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: oklch(0.72 0 0 / 55%); border: 2px solid transparent; background-clip: padding-box; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(0.56 0 0 / 65%); border: 2px solid transparent; background-clip: padding-box; }
 
   ::selection { background: var(--foreground); color: var(--background); }
 }
@@ -118,6 +127,9 @@
 
 @keyframes mesh-pulse { 50% { opacity: .35; } }
 @utility mesh-pulse { animation: mesh-pulse 1.8s ease-in-out infinite; }
+
+@keyframes view-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@utility view-enter { animation: view-enter 180ms ease-out both; }
 
 @media (prefers-reduced-motion: reduce) {
   .mesh-pulse { animation: none; }

@@ -386,6 +386,7 @@ export async function leaveWorkspace(db: ScreenMeshDb): Promise<void> {
     db.objects.clear(),
     db.operations.clear(),
     db.deliveries.clear(),
+    db.events.clear(),
     db.outbox.clear(),
     db.carried.clear(),
     db.seen.clear(),

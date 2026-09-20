@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   toBase64,
+  type Device,
   type DeviceCapability,
   type FileContent,
   type MeshObjectType,
@@ -11,7 +12,8 @@ import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
 import { Button, buttonVariants } from "./ui/button.js";
-import { ArrowUpIcon, ChevronDownIcon, ClipboardIcon, PlusIcon } from "./mesh-icons.js";
+import { SelectMenu } from "./ui/select-menu.js";
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, DeviceTypeIcon, DevicesIcon, PlusIcon } from "./mesh-icons.js";
 
 const CAPABILITY_CHOICES: DeviceCapability[] = [
   "terminal",
@@ -41,12 +43,6 @@ const EXPIRY_CHOICES: Array<{ label: string; ms?: number }> = [
 /** Temporary clipboard tunnel (FUTURE.md): share what's on the clipboard
  *  for a short, fixed window and have it erase itself automatically —
  *  built entirely on the existing expiresAt + deleteAfterOpening options. */
-const CLIPBOARD_DURATIONS: Array<{ label: string; ms: number }> = [
-  { label: "1 minute", ms: 60 * 1000 },
-  { label: "5 minutes", ms: 5 * 60 * 1000 },
-  { label: "15 minutes", ms: 15 * 60 * 1000 },
-];
-
 const TYPE_CHOICES: Array<{ value: MeshObjectType | "auto"; label: string }> = [
   { value: "auto", label: "Auto-detect type" },
   { value: "text", label: "Text" },
@@ -56,6 +52,69 @@ const TYPE_CHOICES: Array<{ value: MeshObjectType | "auto"; label: string }> = [
   { value: "checklist", label: "Checklist (one item per line)" },
   { value: "agent_task", label: "Agent task (structured, for a desktop agent)" },
 ];
+
+function TargetPicker(props: {
+  devices: Device[];
+  targetValue: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = props.targetValue === "__everyone__"
+    ? null
+    : props.devices.find((device) => device.id === props.targetValue);
+  const label = props.targetValue === "__everyone__" ? "Everyone" : current?.name ?? "Select recipients";
+
+  function choose(id: string) {
+    props.onChange(id);
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative min-w-0 flex-1 sm:flex-none">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-background px-2.5 text-left text-xs shadow-sm transition-colors hover:border-foreground/30 focus:outline-none focus:ring-1 focus:ring-ring sm:min-w-44"
+      >
+        {current ? <DeviceTypeIcon deviceType={current.type} className="size-4 shrink-0 text-muted-foreground" /> : <DevicesIcon className="size-4 shrink-0 text-muted-foreground" />}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <ChevronDownIcon className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1.5 w-64 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
+          <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Send to</p>
+          <TargetOption active={props.targetValue === "__everyone__"} icon={<DevicesIcon className="size-4" />} label="Everyone" detail={`All ${props.devices.length} paired devices`} onClick={() => choose("__everyone__")} />
+          <div className="my-1 border-t border-border" />
+          {props.devices.map((device) => (
+            <TargetOption
+              key={device.id}
+              active={props.targetValue === device.id}
+              icon={<DeviceTypeIcon deviceType={device.type} className="size-4" />}
+              label={device.name}
+              detail={`${device.type} / ${device.status === "online" ? "Online" : "Offline"}`}
+              offline={device.status === "offline"}
+              onClick={() => choose(device.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TargetOption(props: { active: boolean; icon: React.ReactNode; label: string; detail: string; offline?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={props.onClick} className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors ${props.active ? "bg-accent" : "hover:bg-accent/70"}`}>
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">{props.icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium">{props.label}</span>
+        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span className={`size-1.5 rounded-full ${props.offline ? "bg-muted-foreground/45" : "bg-success"}`} />{props.detail}</span>
+      </span>
+      {props.active && <CheckIcon className="size-4 shrink-0" />}
+    </button>
+  );
+}
 
 function detectType(text: string): MeshObjectType {
   return /^https?:\/\/\S+$/i.test(text.trim()) ? "link" : "text";
@@ -75,13 +134,13 @@ export function SendPanel(props: {
   const [text, setText] = useState("");
   const [type, setType] = useState<MeshObjectType | "auto">("auto");
   const [file, setFile] = useState<FileContent | null>(null);
+  const [attachmentName, setAttachmentName] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expiryIndex, setExpiryIndex] = useState(0);
   const [deleteAfterOpening, setDeleteAfterOpening] = useState(false);
   const [requireConfirmation, setRequireConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [clipboardDuration, setClipboardDuration] = useState(1); // "5 minutes"
   const [capability, setCapability] = useState<DeviceCapability>(CAPABILITY_CHOICES[0]!);
   const [taskAction, setTaskAction] = useState("echo");
   const [taskParams, setTaskParams] = useState("{}");
@@ -98,19 +157,6 @@ export function SendPanel(props: {
   // Composer target select mirrors the mesh mock's single-target dropdown,
   // but "Everyone" maps onto our real multi-recipient selection model.
   const targetValue = allSelected ? "__everyone__" : (recipients[0]?.id ?? "");
-
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(others.map((d) => d.id)));
-  }
 
   function selectSingleTarget(deviceId: string) {
     if (deviceId === "__everyone__") {
@@ -148,6 +194,7 @@ export function SendPanel(props: {
       size: picked.size,
       dataB64: toBase64(bytes),
     });
+    setAttachmentName(picked.name);
     setNote(null);
   }
 
@@ -160,6 +207,8 @@ export function SendPanel(props: {
     };
   }
 
+  /* Clipboard quick-share is intentionally not exposed in the composer. */
+  /*
   async function shareClipboard() {
     if (recipients.length === 0) return;
     setBusy(true);
@@ -188,6 +237,7 @@ export function SendPanel(props: {
     }
   }
 
+  */
   async function sendAgentTask() {
     if (recipients.length === 0) return;
     setBusy(true);
@@ -227,11 +277,12 @@ export function SendPanel(props: {
       const options = currentOptions();
       if (file) {
         await props.engine.sendObject(
-          { type: file.mimeType.startsWith("image/") ? "image" : "file", content: file },
+          { type: file.mimeType.startsWith("image/") ? "image" : "file", content: { ...file, name: attachmentName.trim() || file.name } },
           recipientIds,
           options,
         );
         setFile(null);
+        setAttachmentName("");
       }
       if (content) {
         const objectType = type === "auto" ? detectType(content) : type;
@@ -259,7 +310,7 @@ export function SendPanel(props: {
     busy || recipients.length === 0 || (type === "agent_task" ? !taskAction.trim() : !text.trim() && !file);
 
   return (
-    <div className="rounded-lg border border-border bg-card p-2 shadow-[0_1px_2px_oklch(0_0_0/.04)]">
+    <div className="rounded-xl border border-border bg-card p-3 shadow-[0_1px_2px_oklch(0_0_0/.04)] transition-shadow focus-within:shadow-[0_4px_16px_oklch(0_0_0/.06)]">
       {type === "agent_task" ? (
         <div className="space-y-2 px-1 pt-1">
           <input
@@ -293,23 +344,22 @@ export function SendPanel(props: {
                 ? "A shell command for a desktop agent to run — it will ask before executing…"
                 : "Type, paste, or drop anything here…"
           }
-          className="min-h-20 w-full resize-none bg-transparent px-2 py-1 text-sm outline-none placeholder:text-muted-foreground"
+          className="min-h-28 w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-muted-foreground md:min-h-32"
         />
       )}
 
       {file && (
-        <div className="mx-1 mb-1 flex items-center gap-2 rounded-md bg-muted px-2 py-1.5 text-xs">
+        <div className="mx-1 mb-1 flex flex-wrap items-center gap-2 rounded-md bg-muted px-2 py-1.5 text-xs">
           <span className="font-medium">{file.mimeType.startsWith("image/") ? "Image" : "File"}</span>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground">
-            {file.name} ({formatSize(file.size)})
-          </span>
-          <button type="button" onClick={() => setFile(null)} className="text-muted-foreground hover:text-foreground">
+          <input aria-label="Attachment name" value={attachmentName} onChange={(event) => setAttachmentName(event.target.value)} placeholder={file.name} className="h-7 min-w-32 flex-1 rounded border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring" />
+          <span className="text-muted-foreground">{formatSize(file.size)}</span>
+          <button type="button" onClick={() => { setFile(null); setAttachmentName(""); }} className="text-muted-foreground hover:text-foreground">
             Remove
           </button>
         </div>
       )}
 
-      <div className="flex items-center gap-2 border-t border-border pt-2">
+      <div className="flex flex-wrap items-center gap-2 border-t border-border px-1 pt-3 sm:gap-y-2">
         <label
           className={buttonVariants({ variant: "ghost", size: "icon" })}
           aria-label="Add attachment"
@@ -326,43 +376,29 @@ export function SendPanel(props: {
           />
           <PlusIcon />
         </label>
+        <span className="hidden text-[10px] text-muted-foreground md:inline">⌘ Enter to send</span>
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Share clipboard"
-          title="Share clipboard"
-          disabled={busy || recipients.length === 0}
-          onClick={() => void shareClipboard()}
+          className="ml-auto sm:hidden"
+          aria-label="More options"
+          title="More options"
+          onClick={() => setShowMore((v) => !v)}
         >
-          <ClipboardIcon />
+          <ChevronDownIcon className={showMore ? "rotate-180" : ""} />
         </Button>
-        <span className="hidden text-[10px] text-muted-foreground sm:inline">⌘ Enter to send</span>
         <button
           type="button"
           onClick={() => setShowMore((v) => !v)}
-          className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          className="ml-auto hidden items-center gap-1 rounded px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
         >
           More options
           <ChevronDownIcon className={`size-3 transition-transform ${showMore ? "rotate-180" : ""}`} />
         </button>
         {others.length > 0 ? (
-          <select
-            aria-label="Send target"
-            value={targetValue}
-            onChange={(e) => selectSingleTarget(e.target.value)}
-            className="h-8 max-w-40 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="">Select target…</option>
-            <option value="__everyone__">Everyone</option>
-            {others.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name}
-                {device.status === "offline" ? " (offline)" : ""}
-              </option>
-            ))}
-          </select>
+          <TargetPicker devices={others} targetValue={targetValue} onChange={selectSingleTarget} />
         ) : (
-          <span className="text-[11px] text-muted-foreground">Pair a device to send to it</span>
+          <span className="flex-1 text-[11px] text-muted-foreground sm:flex-none">No devices paired</span>
         )}
         <Button size="sm" disabled={disabled} onClick={() => void send()}>
           Send <ArrowUpIcon />
@@ -374,69 +410,37 @@ export function SendPanel(props: {
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="text-[11px] text-muted-foreground">
               Type
-              <select
-                aria-label="Payload type"
+              <SelectMenu
+                className="mt-1"
+                ariaLabel="Payload type"
                 value={type}
-                onChange={(e) => setType(e.target.value as MeshObjectType | "auto")}
-                className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-              >
-                {TYPE_CHOICES.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                onValueChange={(value) => setType(value as MeshObjectType | "auto")}
+                options={TYPE_CHOICES}
+              />
             </label>
             <label className="text-[11px] text-muted-foreground">
               Expiration
-              <select
-                aria-label="Expiration"
-                value={expiryIndex}
-                onChange={(e) => setExpiryIndex(Number(e.target.value))}
-                className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-              >
-                {EXPIRY_CHOICES.map((choice, i) => (
-                  <option key={choice.label} value={i}>
-                    {choice.label}
-                  </option>
-                ))}
-              </select>
+              <SelectMenu
+                className="mt-1"
+                ariaLabel="Expiration"
+                value={String(expiryIndex)}
+                onValueChange={(value) => setExpiryIndex(Number(value))}
+                options={EXPIRY_CHOICES.map((choice, index) => ({ value: String(index), label: choice.label }))}
+              />
             </label>
           </div>
 
           {others.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-[11px] text-muted-foreground">Recipients</p>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={allSelected} onChange={toggleAll} className="size-3.5 accent-foreground" />
-                <strong className="font-medium">All devices</strong>
-              </label>
-              {others.map((device) => (
-                <label key={device.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(device.id)}
-                    onChange={() => toggle(device.id)}
-                    className="size-3.5 accent-foreground"
-                  />
-                  <span className={`size-1.5 rounded-full ${device.status === "online" ? "bg-success" : "bg-muted-foreground/45"}`} />
-                  {device.name}
-                  {device.status === "offline" && <span className="text-muted-foreground">(queued until it resurfaces)</span>}
-                </label>
-              ))}
-              <div className="flex items-center gap-2 pt-1">
-                <select
-                  aria-label="Capability to route to"
+            <div className="rounded-md bg-muted/45 p-2.5">
+              <p className="mb-2 text-[11px] font-medium text-muted-foreground">Route by capability</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <SelectMenu
+                  className="w-40"
+                  ariaLabel="Capability to route to"
                   value={capability}
-                  onChange={(e) => setCapability(e.target.value as DeviceCapability)}
-                  className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {CAPABILITY_CHOICES.map((cap) => (
-                    <option key={cap} value={cap}>
-                      {cap}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={(value) => setCapability(value as DeviceCapability)}
+                  options={CAPABILITY_CHOICES.map((cap) => ({ value: cap, label: cap.replace("-", " ") }))}
+                />
                 <Button size="sm" variant="outline" onClick={() => void routeToCapability()}>
                   Route to device with this capability
                 </Button>
@@ -444,24 +448,28 @@ export function SendPanel(props: {
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={deleteAfterOpening}
-              onChange={(e) => setDeleteAfterOpening(e.target.checked)}
-              className="size-3.5 accent-foreground"
-            />
-            Delete after opening
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={requireConfirmation}
-              onChange={(e) => setRequireConfirmation(e.target.checked)}
-              className="size-3.5 accent-foreground"
-            />
-            Require confirmation before delivery counts as accepted
-          </label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-3 transition-colors ${deleteAfterOpening ? "border-foreground bg-accent" : "border-border hover:border-foreground/30"}`}>
+              <input type="checkbox" checked={deleteAfterOpening} onChange={(e) => setDeleteAfterOpening(e.target.checked)} className="sr-only" />
+              <span className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded border ${deleteAfterOpening ? "border-foreground bg-foreground text-background" : "border-input bg-background"}`}>
+                {deleteAfterOpening && <CheckIcon className="size-3" />}
+              </span>
+              <span>
+                <span className="block text-xs font-medium">Delete after opening</span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">Remove it once the recipient opens it.</span>
+              </span>
+            </label>
+            <label className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-3 transition-colors ${requireConfirmation ? "border-foreground bg-accent" : "border-border hover:border-foreground/30"}`}>
+              <input type="checkbox" checked={requireConfirmation} onChange={(e) => setRequireConfirmation(e.target.checked)} className="sr-only" />
+              <span className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded border ${requireConfirmation ? "border-foreground bg-foreground text-background" : "border-input bg-background"}`}>
+                {requireConfirmation && <CheckIcon className="size-3" />}
+              </span>
+              <span>
+                <span className="block text-xs font-medium">Require confirmation</span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">Count delivery only after the recipient accepts.</span>
+              </span>
+            </label>
+          </div>
         </div>
       )}
 

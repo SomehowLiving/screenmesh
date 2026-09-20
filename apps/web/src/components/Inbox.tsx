@@ -13,6 +13,7 @@ import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
 import { Button } from "./ui/button.js";
+import { SelectMenu } from "./ui/select-menu.js";
 import { ActivityIcon, CommandIcon, LinkIcon } from "./mesh-icons.js";
 
 const EDITABLE_TYPES = new Set(["text", "code", "link"]);
@@ -202,11 +203,6 @@ export function InboxPanel(props: {
       : (devices.find((d) => d.id === id)?.name ?? "unknown device");
   const others: Device[] = devices.filter((d) => d.id !== props.me.deviceId);
 
-  const visible =
-    props.filter === "All objects"
-      ? objects
-      : objects.filter((o) => o.type === props.filter.toLowerCase());
-
   // Continue-on-device: another device asked us to open this object.
   useEffect(() => {
     const value = focus?.value as { objectId: string; from: string } | undefined;
@@ -220,6 +216,15 @@ export function InboxPanel(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
 
+  const visible = objects.filter((object) => {
+    if (props.filter === "Shared with me") return object.createdBy !== props.me.deviceId;
+    if (props.filter === "Needs attention") return deliveryByObjectId.get(object.id)?.status === "pending";
+    // "Active" deliberately means the current working set: the objects held
+    // on this device, ordered by their most recent change. Type browsing lives
+    // in Library, where it does not compete with day-to-day work.
+    return true;
+  });
+
   async function markOpenedIfReceived(object: MeshObject) {
     if (object.createdBy !== props.me.deviceId) {
       await props.engine.markOpened(object.id);
@@ -227,10 +232,28 @@ export function InboxPanel(props: {
   }
 
   if (objects.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">Nothing here yet.</p>;
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+        <span className="grid size-9 place-items-center rounded-full border border-border bg-card text-muted-foreground [&_svg]:size-4">
+          <ActivityIcon />
+        </span>
+        <p className="text-sm font-medium">Nothing here yet</p>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          Objects you send or receive across the mesh will show up here.
+        </p>
+      </div>
+    );
   }
   if (visible.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">No {props.filter.toLowerCase()} yet.</p>;
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+        <span className="grid size-9 place-items-center rounded-full border border-border bg-card text-muted-foreground [&_svg]:size-4">
+          <ActivityIcon />
+        </span>
+        <p className="text-sm font-medium">No {props.filter.toLowerCase()} yet</p>
+        <p className="max-w-xs text-xs text-muted-foreground">Switch the filter above, or send one from the composer.</p>
+      </div>
+    );
   }
 
   return (
@@ -363,25 +386,18 @@ export function InboxPanel(props: {
                     </Button>
                   )}
                   {others.length > 0 && (
-                    <select
-                      aria-label="Continue on device"
+                    <SelectMenu
+                      className="w-36"
+                      ariaLabel="Continue on device"
+                      placeholder="Continue on"
                       value=""
-                      onChange={(e) => {
-                        if (e.target.value) void props.engine.continueOnDevice(object.id, e.target.value);
-                        e.target.value = "";
-                      }}
-                      className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      <option value="" disabled>
-                        Continue on…
-                      </option>
-                      {others.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.name}
-                          {device.status === "offline" ? " (offline)" : ""}
-                        </option>
-                      ))}
-                    </select>
+                      onValueChange={(value) => void props.engine.continueOnDevice(object.id, value)}
+                      options={others.map((device) => ({
+                        value: device.id,
+                        label: device.name,
+                        description: device.status === "online" ? "Online" : "Offline — queues until available",
+                      }))}
+                    />
                   )}
                   <Button
                     size="sm"

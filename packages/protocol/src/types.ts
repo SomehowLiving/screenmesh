@@ -107,6 +107,19 @@ export interface Delivery {
   options?: SendOptions;
 }
 
+/** Local-only, append-only operational history. Event metadata never contains object plaintext. */
+export interface MeshEvent {
+  id: string;
+  timestamp: number;
+  category: "transfer" | "device" | "network" | "security";
+  type: string;
+  title: string;
+  detail: string;
+  deviceId?: string;
+  objectId?: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
 /** Content shape for "text" | "link" | "code" objects. */
 export interface TextContent {
   text: string;

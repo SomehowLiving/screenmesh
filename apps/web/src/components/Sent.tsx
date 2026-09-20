@@ -39,7 +39,17 @@ export function SentPanel(props: { db: ScreenMeshDb; me: LocalIdentity }) {
   const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "unknown device";
 
   if (deliveries.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">Nothing sent yet.</p>;
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+        <span className="grid size-9 place-items-center rounded-full border border-border bg-card text-muted-foreground [&_svg]:size-4">
+          <ArrowUpIcon />
+        </span>
+        <p className="text-sm font-medium">Nothing sent yet</p>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          Whatever you send from the composer above will show up here with its delivery status.
+        </p>
+      </div>
+    );
   }
 
   return (

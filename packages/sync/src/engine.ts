@@ -16,6 +16,7 @@ import {
   type FileContent,
   type MeshObject,
   type MeshObjectType,
+  type MeshEvent,
   type ObjectRefPayload,
   type Operation,
   type OperationType,
@@ -144,6 +145,11 @@ export class MeshEngine {
     return this.cfg.now ? this.cfg.now() : Date.now();
   }
 
+  /** Records operational metadata locally; never records object plaintext or encryption keys. */
+  private async recordEvent(event: Omit<MeshEvent, "id" | "timestamp">): Promise<void> {
+    await this.cfg.db.events.put({ id: crypto.randomUUID(), timestamp: this.now(), ...event });
+  }
+
   async start(): Promise<void> {
     const seqSetting = await this.cfg.db.settings.get("mySeq");
     this.seq = typeof seqSetting?.value === "number" ? seqSetting.value : 0;
@@ -238,6 +244,14 @@ export class MeshEngine {
         ...(Object.keys(options).length > 0 ? { options } : {}),
       };
       await this.cfg.db.deliveries.add(delivery);
+      await this.recordEvent({
+        category: "transfer",
+        type: "delivery-created",
+        title: "Payload queued for delivery",
+        detail: `${object.type} → ${recipientId}`,
+        deviceId: recipientId,
+        objectId: object.id,
+      });
 
       let sentLive: boolean;
       if (chunked && asFile) {
@@ -269,6 +283,7 @@ export class MeshEngine {
       }
       if (sentLive) {
         await this.cfg.db.deliveries.update(delivery.id, { status: "sending" });
+        await this.recordEvent({ category: "transfer", type: "delivery-sent", title: "Payload handed to transport", detail: `${object.type} → ${recipientId}`, deviceId: recipientId, objectId: object.id });
       }
     }
     return object;
@@ -645,6 +660,7 @@ export class MeshEngine {
       signature: envelope.signature,
       offeredTo: [],
     });
+    await this.recordEvent({ category: "transfer", type: "delivery-queued", title: "Payload waiting for a route", detail: `Encrypted bundle queued for ${recipientId}`, deviceId: recipientId });
     return false;
   }
 
@@ -678,6 +694,7 @@ export class MeshEngine {
     for (const bundle of await this.cfg.db.outbox.toArray()) {
       if (await this.deliverBytes(bundle.destinationDeviceId, bundle.encryptedPayload)) {
         await this.cfg.db.outbox.delete(bundle.bundleId);
+        await this.recordEvent({ category: "network", type: "outbox-drained", title: "Queued payload resumed", detail: `A route opened to ${bundle.destinationDeviceId}`, deviceId: bundle.destinationDeviceId });
       }
     }
   }
@@ -696,6 +713,7 @@ export class MeshEngine {
       if (dest?.status !== "online") continue;
       if (await this.forwardCarriedBytes(bundle.destinationDeviceId, bundle.encryptedPayload)) {
         await this.cfg.db.carried.delete(bundle.bundleId);
+        await this.recordEvent({ category: "network", type: "carried-forwarded", title: "Carried bundle forwarded", detail: `Encrypted bundle forwarded to ${bundle.destinationDeviceId}`, deviceId: bundle.destinationDeviceId });
       }
     }
   }
@@ -769,6 +787,7 @@ export class MeshEngine {
           hopLimit: nextHopLimit,
           offeredTo: [...offeredTo, carrier.id],
         });
+        await this.recordEvent({ category: "network", type: "carrier-assigned", title: "Trusted carrier assigned", detail: `Encrypted bundle offered to ${carrier.name}`, deviceId: carrier.id });
       }
     }
   }
@@ -1049,6 +1068,7 @@ export class MeshEngine {
   }
 
   private async applyPresence(entries: PresenceEntry[]): Promise<void> {
+    const previous = new Map((await this.cfg.db.devices.toArray()).map((device) => [device.id, device]));
     const rows: Device[] = entries.map((entry) => ({
       id: entry.id,
       name: entry.name,
@@ -1064,6 +1084,14 @@ export class MeshEngine {
       trusted: true,
     }));
     await this.cfg.db.devices.bulkPut(rows);
+    for (const row of rows) {
+      const was = previous.get(row.id);
+      if (was && was.status !== row.status) {
+        await this.recordEvent({ category: "device", type: row.status === "online" ? "device-online" : "device-offline", title: row.status === "online" ? "Device came online" : "Device went offline", detail: row.name, deviceId: row.id });
+      } else if (!was) {
+        await this.recordEvent({ category: "device", type: "device-joined", title: "Device joined workspace", detail: row.name, deviceId: row.id });
+      }
+    }
     // The roster is authoritative: devices no longer in it were revoked.
     const ids = new Set(entries.map((entry) => entry.id));
     await this.cfg.db.devices.filter((d) => !ids.has(d.id)).delete();
@@ -1103,6 +1131,7 @@ export class MeshEngine {
         ...(gated ? {} : { deliveredAt: now }),
         ...(options && Object.keys(options).length > 0 ? { options } : {}),
       });
+      await this.recordEvent({ category: "transfer", type: "delivery-received", title: "Payload received", detail: `From ${senderId}`, deviceId: senderId, objectId });
     }
     if (!gated) {
       await this.sendOps(senderId, [

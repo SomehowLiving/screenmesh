@@ -3,6 +3,7 @@ import type {
   Delivery,
   DeliveryBundle,
   Device,
+  MeshEvent,
   MeshObject,
   Operation,
   Workspace,
@@ -50,6 +51,8 @@ export class ScreenMeshDb extends Dexie {
   objects!: Table<MeshObject, string>;
   operations!: Table<Operation, string>;
   deliveries!: Table<Delivery, string>;
+  /** Local-only event ledger for activity and transport diagnostics. */
+  events!: Table<MeshEvent, string>;
   /** Pending encrypted bundles awaiting a route (Eventual mode). */
   outbox!: Table<DeliveryBundle, string>;
   /** Encrypted bundles this device is carrying for other devices. */
@@ -79,6 +82,9 @@ export class ScreenMeshDb extends Dexie {
     });
     this.version(4).stores({
       ratchets: "peerDeviceId",
+    });
+    this.version(5).stores({
+      events: "id, timestamp, category, type, deviceId, objectId",
     });
   }
 }

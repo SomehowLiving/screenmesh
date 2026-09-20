@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { DeviceType } from "@screenmesh/protocol";
 import { defaultDeviceType } from "../lib/app.js";
 import { Button } from "./ui/button.js";
+import { SelectMenu } from "./ui/select-menu.js";
 import { LockIcon, MeshMark } from "./mesh-icons.js";
 
 const DEVICE_TYPE_OPTIONS: Array<{ value: DeviceType; label: string }> = [
@@ -49,18 +50,13 @@ export function SetupView(props: {
             autoFocus
             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
-          <select
-            aria-label="Device type"
+          <SelectMenu
+            ariaLabel="Device type"
             value={type}
-            onChange={(e) => setType(e.target.value as DeviceType)}
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
-          >
-            {DEVICE_TYPE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => setType(value as DeviceType)}
+            options={DEVICE_TYPE_OPTIONS}
+            triggerClassName="h-10 px-3 text-sm"
+          />
           <div className="flex items-start gap-2 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
             <LockIcon className="mt-0.5 size-4 shrink-0" />
             <span>Local keypair generated. Your private key never leaves this device.</span>

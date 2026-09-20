@@ -29,6 +29,25 @@ export function DevicesIcon(props: IconProps) {
   return <Icon {...props}><rect x="2.5" y="4" width="10" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M6 15h9.5a2 2 0 0 0 2-2V8M6.5 12v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></Icon>;
 }
 
+type DeviceKind = "phone" | "laptop" | "tablet" | "display" | "desktop";
+
+/** A shared, recognisable silhouette for every paired-device surface. */
+export function DeviceTypeIcon({ deviceType, ...props }: IconProps & { deviceType: DeviceKind }) {
+  switch (deviceType) {
+    case "phone":
+      return <Icon {...props}><rect x="6.2" y="2.5" width="7.6" height="15" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M9 14.8h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></Icon>;
+    case "tablet":
+      return <Icon {...props}><rect x="4.5" y="2.8" width="11" height="14.4" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><circle cx="10" cy="14.7" r=".6" fill="currentColor" /></Icon>;
+    case "display":
+      return <Icon {...props}><rect x="2.5" y="3.5" width="15" height="10.2" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M10 13.7v2.8M6.8 16.5h6.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></Icon>;
+    case "desktop":
+      return <Icon {...props}><rect x="3" y="3" width="8.5" height="14" rx="1.4" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 6h3.5M5.5 9h3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /><rect x="13.5" y="6" width="3.5" height="8" rx=".8" stroke="currentColor" strokeWidth="1.4" /></Icon>;
+    case "laptop":
+    default:
+      return <Icon {...props}><rect x="4" y="3.5" width="12" height="9" rx="1.3" stroke="currentColor" strokeWidth="1.4" /><path d="M2.5 14.5h15l-1 1.8h-13l-1-1.8Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /></Icon>;
+  }
+}
+
 export function ActivityIcon(props: IconProps) {
   return <Icon {...props}><path d="M2.5 10h3l2-5 4 10 2-5h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></Icon>;
 }

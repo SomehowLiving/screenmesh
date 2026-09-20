@@ -10,6 +10,7 @@ import {
   type LocalWorkspace,
 } from "../lib/app.js";
 import { Button } from "./ui/button.js";
+import { SelectMenu } from "./ui/select-menu.js";
 import { LockIcon } from "./mesh-icons.js";
 
 /**
@@ -82,6 +83,12 @@ export function PairPanel(props: {
     }
   }, [joinUrl]);
 
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timeout);
+  }, [copied]);
+
   // Live self-destruct countdown — ticks off the real pairing.expiresAt.
   useEffect(() => {
     if (!pairing) return;
@@ -106,12 +113,12 @@ export function PairPanel(props: {
         </div>
       )}
 
-      <div className="grid gap-5 sm:grid-cols-[220px_minmax(0,1fr)]">
-        <div className="grid place-items-center rounded-lg border border-border bg-white p-3">
-          {joinUrl && <canvas ref={canvasRef} />}
+      <div className="grid items-start gap-6 md:grid-cols-[272px_minmax(0,1fr)] md:gap-8">
+        <div className="grid aspect-square w-full place-items-center rounded-lg border border-border bg-white p-4">
+          {joinUrl && <canvas ref={canvasRef} className="h-auto max-w-full" />}
         </div>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-4">
           <div>
             <p className="text-sm font-semibold">Connect a new screen</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -147,31 +154,35 @@ export function PairPanel(props: {
           </div>
 
           {candidates.length > 1 && (
-            <div className="space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">Network interface</label>
-              <div className="flex items-center gap-2">
-                <select
-                  aria-label="Network interface"
+            <div className="rounded-lg border border-border bg-muted/35 p-3">
+              <div className="mb-2.5">
+                <p className="text-xs font-medium">Network interface</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Choose a different local route if the QR code is not reachable.</p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <SelectMenu
+                  className="min-w-0 flex-1"
+                  ariaLabel="Network interface"
                   value={selectedOrigin}
-                  onChange={(e) => setSelectedOrigin(e.target.value)}
-                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {candidates.map((c) => (
-                    <option key={c.origin} value={c.origin}>
-                      {c.name} — {c.address}
-                    </option>
-                  ))}
-                </select>
-                <Button size="sm" variant="outline" onClick={() => void regenerate(selectedOrigin)}>
+                  onValueChange={setSelectedOrigin}
+                  options={candidates.map((candidate) => ({
+                    value: candidate.origin,
+                    label: candidate.name,
+                    description: candidate.address,
+                  }))}
+                />
+                <Button size="sm" variant="outline" className="shrink-0" onClick={() => void regenerate(selectedOrigin)}>
                   Use this network
                 </Button>
               </div>
             </div>
           )}
 
-          <Button size="sm" variant="outline" onClick={() => void regenerate()}>
-            Rotate key
-          </Button>
+          <div className="border-t border-border pt-3">
+            <Button size="sm" variant="outline" onClick={() => void regenerate()}>
+              Generate a new code
+            </Button>
+          </div>
         </div>
       </div>
     </div>
