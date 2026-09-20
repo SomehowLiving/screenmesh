@@ -22,12 +22,21 @@ import { SendPanel } from "./components/Send.js";
 import { InboxPanel } from "./components/Inbox.js";
 import { SentPanel } from "./components/Sent.js";
 
+const STATUS_LABEL: Record<TransportStatus, string> = {
+  idle: "IDLE",
+  discovering: "SCANNING",
+  connecting: "SYNCING",
+  connected: "LINK SECURE",
+  disconnected: "LINK DOWN",
+  error: "LINK ERROR",
+};
+
 function ConnBadge(props: { transport: WebSocketRelayTransport }) {
   const [status, setStatus] = useState<TransportStatus>(
     props.transport.isConnected ? "connected" : "connecting",
   );
   useEffect(() => props.transport.subscribeStatus(setStatus), [props.transport]);
-  return <span className={`badge ${status}`}>{status}</span>;
+  return <span className={`badge ${status}`}>{STATUS_LABEL[status]}</span>;
 }
 
 export function App() {
@@ -125,7 +134,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, me, wsState]);
 
-  if (!loaded) return <div className="center">Loading…</div>;
+  if (!loaded) return <div className="center mono">BOOTING SECURE MESH…</div>;
 
   if (!me) {
     return (
@@ -138,7 +147,7 @@ export function App() {
     );
   }
 
-  if (pendingJoin) return <div className="center">Joining workspace…</div>;
+  if (pendingJoin) return <div className="center mono">ESTABLISHING LINK…</div>;
 
   if (!wsState) {
     return (
@@ -155,32 +164,32 @@ export function App() {
     );
   }
 
-  if (!session) return <div className="center">Connecting…</div>;
+  if (!session) return <div className="center mono">OPENING CHANNEL…</div>;
 
   return (
     <div className="app">
       <header className="bar">
         <h1>ScreenMesh</h1>
-        <span className="muted">{wsState.workspace.name}</span>
+        <span className="muted">CHANNEL::{wsState.workspace.name}</span>
         <ConnBadge transport={session.transport} />
         {wsState.workspace.expiresAt !== undefined && (
           <span className="muted">
-            expires {new Date(wsState.workspace.expiresAt).toLocaleString()}
+            self-destructs {new Date(wsState.workspace.expiresAt).toLocaleString()}
           </span>
         )}
         <span className="spacer" />
         <span className="muted">
-          {me.name} · {me.deviceType}
+          OPERATOR::{me.name} · {me.deviceType}
         </span>
         <button
           className="ghost"
           onClick={() => {
-            if (window.confirm("Leave this workspace? Local workspace data will be removed from this device.")) {
-              void resetToLanding("You left the workspace.");
+            if (window.confirm("Terminate this channel? Local workspace data will be wiped from this device.")) {
+              void resetToLanding("Channel terminated.");
             }
           }}
         >
-          Leave
+          Terminate
         </button>
       </header>
       {error && <div className="error">{error}</div>}

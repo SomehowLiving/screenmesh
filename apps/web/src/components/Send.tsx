@@ -246,7 +246,7 @@ export function SendPanel(props: {
 
   return (
     <section className="card stack">
-      <h2>Send to device</h2>
+      <h2>Dispatch payload</h2>
       {type === "agent_task" ? (
         <div className="stack">
           <input
@@ -308,7 +308,7 @@ export function SendPanel(props: {
               e.target.value = "";
             }}
           />
-          <span className="badge">＋ attach image or file (up to 25 MB)</span>
+          <span className="badge">＋ attach payload (up to 25 MB)</span>
         </label>
       )}
       <div className="actions">
@@ -317,7 +317,7 @@ export function SendPanel(props: {
           disabled={busy || recipients.length === 0}
           onClick={() => void shareClipboard()}
         >
-          📋 Share clipboard
+          Clipboard drop
         </button>
         <select
           value={clipboardDuration}
@@ -346,12 +346,12 @@ export function SendPanel(props: {
               ))}
             </select>
             <button className="ghost" onClick={() => void routeToCapability()}>
-              Route to device with this capability
+              Route to node with this capability
             </button>
           </div>
           <label className="check">
             <input type="checkbox" checked={allSelected} onChange={toggleAll} />
-            <strong>All devices</strong>
+            <strong>All nodes</strong>
           </label>
           {others.map((device) => (
             <label className="check" key={device.id}>
@@ -363,7 +363,7 @@ export function SendPanel(props: {
               <span className={`dot ${device.status}`} />
               {device.name}
               {device.status === "offline" && (
-                <span className="muted">(queued until it returns)</span>
+                <span className="muted">(dark — queued until it resurfaces)</span>
               )}
             </label>
           ))}
@@ -400,7 +400,7 @@ export function SendPanel(props: {
         }
         onClick={() => void send()}
       >
-        Send
+        Transmit
       </button>
       {note && <p className="muted">{note}</p>}
     </section>

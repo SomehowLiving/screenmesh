@@ -16,9 +16,9 @@ export default defineConfig({
         name: "ScreenMesh",
         short_name: "ScreenMesh",
         description:
-          "Move notes, links, screenshots, files, and clipboard items between your devices — even when they are temporarily disconnected.",
-        theme_color: "#0f172a",
-        background_color: "#0f172a",
+          "Encrypted device-to-device relay. Move notes, links, files, and clipboard items across your machines — no accounts, no cloud, no trace left behind.",
+        theme_color: "#000000",
+        background_color: "#000000",
         display: "standalone",
         start_url: "/",
         icons: [

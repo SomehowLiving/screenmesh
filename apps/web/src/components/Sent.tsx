@@ -30,8 +30,8 @@ export function SentPanel(props: { db: ScreenMeshDb; me: LocalIdentity }) {
 
   return (
     <section className="card">
-      <h2>Sent</h2>
-      {deliveries.length === 0 && <p className="muted">Nothing sent yet.</p>}
+      <h2>Transmission log</h2>
+      {deliveries.length === 0 && <p className="muted">No transmissions logged.</p>}
       <ul className="plain">
         {deliveries.map((delivery) => (
           <li className="row" key={delivery.id} style={{ alignItems: "flex-start" }}>

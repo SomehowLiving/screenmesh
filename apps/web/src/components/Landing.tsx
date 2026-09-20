@@ -22,12 +22,13 @@ export function LandingView(props: {
   return (
     <div className="center">
       <h1>ScreenMesh</h1>
+      <p className="tagline">[ encrypted device-to-device relay — no accounts, no cloud ]</p>
       {(props.error ?? error) && <div className="error">{props.error ?? error}</div>}
       <div className="grid" style={{ width: "min(760px, 95vw)" }}>
         <section className="card stack">
-          <h2>Create a workspace</h2>
+          <h2>Establish channel</h2>
           <p className="muted">
-            This device becomes the owner and can pair others via QR code or link.
+            This node becomes the owner and can admit others via QR handshake or link.
           </p>
           <input
             type="text"
@@ -55,16 +56,16 @@ export function LandingView(props: {
               }
             }}
           >
-            Create workspace
+            Initialize channel
           </button>
         </section>
         <section className="card stack">
-          <h2>Join a workspace</h2>
+          <h2>Infiltrate channel</h2>
           <p className="muted">
-            Scan the owner's QR with your camera, or paste the join link / code here.
+            Scan the owner's QR with your camera, or paste the access link / code below.
           </p>
           <textarea
-            placeholder="Paste join link or pairing code"
+            placeholder="Paste access link or pairing code"
             value={joinCode}
             onChange={(e) => setJoinCode(e.target.value)}
           />
@@ -80,7 +81,7 @@ export function LandingView(props: {
               }
             }}
           >
-            Join
+            Connect
           </button>
         </section>
       </div>

@@ -215,11 +215,11 @@ export function InboxPanel(props: {
 
   return (
     <section className="card">
-      <h2>Objects</h2>
+      <h2>Intercepted payloads</h2>
       {continuedFrom && (
-        <p className="muted">Continued here from {continuedFrom}.</p>
+        <p className="muted">Handoff received from {continuedFrom}.</p>
       )}
-      {objects.length === 0 && <p className="muted">Nothing here yet.</p>}
+      {objects.length === 0 && <p className="muted">No traffic yet.</p>}
       <ul className="plain">
         {objects.map((object) => {
           const mine = object.createdBy === props.me.deviceId;
@@ -327,7 +327,7 @@ export function InboxPanel(props: {
                           await markOpenedIfReceived(object);
                         }}
                       >
-                        {object.type === "clipboard" ? "📋 Paste to my clipboard" : "Copy"}
+                        {object.type === "clipboard" ? "Extract to clipboard" : "Copy"}
                       </button>
                     )}
                     {object.type === "link" && text !== null && (
@@ -366,7 +366,7 @@ export function InboxPanel(props: {
                       className="ghost"
                       onClick={() => void props.engine.deleteObjectLocal(object.id)}
                     >
-                      Delete
+                      Purge
                     </button>
                   </div>
                 )}

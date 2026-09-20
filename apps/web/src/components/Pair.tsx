@@ -65,10 +65,10 @@ export function PairPanel(props: {
   if (!isOwner) {
     return (
       <section className="card">
-        <h2>Pair a device</h2>
+        <h2>Secure link</h2>
         <p className="muted">
-          Only the workspace owner ({props.workspace.ownerDeviceId === props.me.deviceId ? "you" : "another device"})
-          can mint pairing codes. Ask the owner device to show its QR.
+          Only the channel owner ({props.workspace.ownerDeviceId === props.me.deviceId ? "you" : "another device"})
+          can mint access codes. Ask the owner node to display its QR.
         </p>
       </section>
     );
@@ -76,15 +76,15 @@ export function PairPanel(props: {
 
   return (
     <section className="card">
-      <h2>Pair a device</h2>
+      <h2>Secure link</h2>
       {error && <div className="error">{error}</div>}
       <div className="qr-wrap">
         {joinUrl && <canvas ref={canvasRef} />}
         <div className="stack" style={{ flex: 1, minWidth: 220 }}>
           <p className="muted">
-            Scan with the other device's camera, or copy the link. Codes are{" "}
-            <strong>single-use</strong> and expire in 5 minutes — generate a new one
-            for each device.
+            Scan with the other node's camera, or copy the access link. Codes are{" "}
+            <strong>single-use</strong> and self-destruct in 5 minutes — mint a fresh one
+            per node.
           </p>
           {joinUrl && (
             <p className="muted">
@@ -118,7 +118,7 @@ export function PairPanel(props: {
           )}
           {pairing && (
             <p className="muted">
-              Expires {new Date(pairing.expiresAt).toLocaleTimeString()}
+              Self-destructs {new Date(pairing.expiresAt).toLocaleTimeString()}
             </p>
           )}
           <div className="actions">
@@ -132,9 +132,9 @@ export function PairPanel(props: {
                 }
               }}
             >
-              {copied ? "Copied!" : "Copy join link"}
+              {copied ? "Copied" : "Copy access link"}
             </button>
-            <button onClick={() => void regenerate()}>New code</button>
+            <button onClick={() => void regenerate()}>Rotate key</button>
           </div>
         </div>
       </div>

@@ -42,15 +42,15 @@ export function DevicesPanel(props: {
   const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "an offline device";
 
   async function remove(deviceId: string, name: string) {
-    if (!window.confirm(`Remove "${name}" from this workspace? It will lose relay access immediately.`)) {
+    if (!window.confirm(`Revoke "${name}" from this channel? Access is cut immediately, no appeal.`)) {
       return;
     }
     try {
       setNote(null);
       await revokeDevice(props.me, props.workspace, props.engine, deviceId);
-      setNote(`${name} was removed.`);
+      setNote(`${name} was revoked.`);
     } catch (err) {
-      setNote(`Could not remove device: ${err instanceof Error ? err.message : err}`);
+      setNote(`Could not revoke node: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -69,9 +69,9 @@ export function DevicesPanel(props: {
 
   return (
     <section className="card">
-      <h2>Devices</h2>
+      <h2>Active nodes</h2>
       {devices.length === 0 && (
-        <p className="muted">No devices yet — pair one with the QR code.</p>
+        <p className="muted">No nodes on this channel yet — admit one with the QR handshake.</p>
       )}
       <ul className="plain">
         {devices.map((device) => (
@@ -97,7 +97,7 @@ export function DevicesPanel(props: {
                 className="ghost"
                 onClick={() => void remove(device.id, device.name)}
               >
-                Remove
+                Revoke
               </button>
             )}
           </li>
@@ -105,8 +105,8 @@ export function DevicesPanel(props: {
       </ul>
       <div className="stack">
         <p className="muted">
-          This device's capabilities — lets others route a send to
-          "whichever device has X" instead of naming this device directly.
+          This node's advertised capabilities — lets others route a transmission to
+          "whichever node has X" instead of naming this node directly.
         </p>
         <div className="actions">
           {CAPABILITY_CHOICES.map((cap) => (
@@ -123,9 +123,9 @@ export function DevicesPanel(props: {
       </div>
       {carrying.length > 0 && (
         <p className="muted">
-          Carrying {carrying.length} item{carrying.length === 1 ? "" : "s"} for{" "}
+          Smuggling {carrying.length} sealed payload{carrying.length === 1 ? "" : "s"} for{" "}
           {[...new Set(carrying.map((b) => nameOf(b.destinationDeviceId)))].join(", ")} —
-          delivered automatically once reachable.
+          delivered the moment that node resurfaces. This node can't read them.
         </p>
       )}
       {note && <p className="muted">{note}</p>}

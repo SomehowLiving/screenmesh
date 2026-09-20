@@ -12,10 +12,11 @@ export function SetupView(props: {
   return (
     <div className="center">
       <h1>ScreenMesh</h1>
+      <p className="tagline">[ classified access :: node registration ]</p>
       <p className="muted">
         {props.joining
-          ? "Name this device to join the workspace."
-          : "Name this device to get started. Its keypair is generated locally and never leaves this device."}
+          ? "Identify this node to join the channel."
+          : "Identify this node to proceed. Its keypair is generated locally and never leaves this device — no server, ever, holds it."}
       </p>
       <form
         className="stack"
@@ -27,7 +28,7 @@ export function SetupView(props: {
       >
         <input
           type="text"
-          placeholder="Device name (e.g. Nidhi's Laptop)"
+          placeholder="Node callsign (e.g. Nidhi's Laptop)"
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
@@ -40,7 +41,7 @@ export function SetupView(props: {
           <option value="display">Display</option>
         </select>
         <button type="submit" disabled={!name.trim()}>
-          Create device identity
+          Generate identity
         </button>
       </form>
     </div>
