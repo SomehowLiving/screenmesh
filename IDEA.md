@@ -1,63 +1,47 @@
 # Product Concept: ScreenMesh
 
-## 1. What Are We Building?
+## 1. What Is ScreenMesh?
 
-**ScreenMesh is a local-first cross-device workspace that lets users move notes, links, screenshots, files, clipboard items, and commands between nearby devices without depending on a single connection method.**
+**ScreenMesh is a local-first cross-device workspace that moves notes, links, screenshots, files, clipboard items, and commands between nearby devices without depending on a single connection method.**
 
-A user should be able to:
+A user opens ScreenMesh on a laptop, opens it on a phone, pairs the two with a QR code (or a nearby BLE/NFC tap on Android), and from then on:
 
-1. Open ScreenMesh on a laptop.
-2. Open it on a phone.
-3. Pair the devices using a QR code, nearby discovery, or another available method.
-4. Create something on one device.
-5. Send it to another device or continue editing it there.
-6. Keep working even when one device disconnects.
-7. Automatically synchronize changes when the devices reconnect.
+1. Anything created on one device can be sent to another, to several, or to everyone in the workspace.
+2. Editing continues even when a device disconnects.
+3. Changes reconcile automatically the moment devices reconnect.
+4. If no device is reachable right now, the content waits — encrypted, queued — until one is.
 
-The product starts as a PWA but is designed as a broader cross-device communication layer.
-
-It is not simply:
+It is not:
 
 > A collaborative notes application using Bluetooth.
 
 It is:
 
-> A personal network connecting the user’s screens, where content can move through any available transport.
+> A personal network connecting a user's screens, where content moves through whichever route is currently available.
 
 ---
 
 # 2. Core Product Definition
 
-ScreenMesh treats every connected device as a surface inside one personal workspace.
-
-For example:
+ScreenMesh treats every connected device as a surface inside one personal workspace:
 
 ```text
-Nidhi’s Phone
-Nidhi’s Laptop
+Nidhi's Phone
+Nidhi's Laptop
 Lab Desktop
 Tablet
 Meeting Room Screen
 ```
 
-Each device has:
+Each device carries:
 
-* An identity
-* A local inbox
-* A local outbox
-* A list of paired devices
-* A synchronized workspace
+* An identity (Ed25519 signing + X25519 key-agreement keys, generated locally — no account, no signup)
+* A local inbox and outbox
+* A list of paired devices with live presence
+* A synchronized copy of the workspace
 * A record of pending and delivered objects
 
-The user can create an object on one device and send it to:
-
-* One specific device
-* Multiple devices
-* Every device in a workspace
-* The next available device
-* A currently offline device
-
-Objects may include:
+An object can be sent to one specific device, several, everyone in the workspace, or "whichever device currently has the capability I need" — and it can target a device that's offline right now, arriving the moment that device comes back.
 
 ```ts
 type MeshObject =
@@ -66,258 +50,69 @@ type MeshObject =
   | Link
   | Image
   | File
-  | VoiceNote
   | Checklist
   | CodeSnippet
   | Command
-  | Task;
+  | AgentTask;
 ```
 
 ---
 
-# 3. What Problem Are We Solving?
+# 3. The Problem
 
-People increasingly work across several devices:
+People work across several devices — phone, personal laptop, work laptop, tablet, a shared lab machine, a meeting-room display — but moving temporary information between them is still fragmented. The usual workarounds:
 
-* Phone
-* Personal laptop
-* Work laptop
-* Tablet
-* Secondary desktop
-* Shared lab computer
-* Smart display
-* Projector or meeting-room screen
-
-However, transferring temporary information between these devices is still unnecessarily fragmented.
-
-Common workflows include:
-
-* Sending yourself a WhatsApp message
+* Messaging yourself on WhatsApp or Telegram
 * Emailing yourself a link
-* Uploading a file to Google Drive
-* Opening the same notes application everywhere
+* Uploading a file to Drive just to redownload it elsewhere
 * Copying through Slack
-* Creating a temporary Telegram message
-* Pairing through Bluetooth manually
-* Logging into personal accounts on shared machines
-* Taking screenshots and re-uploading them elsewhere
+* Manually pairing over Bluetooth
+* Logging a personal account into a shared machine
+* Screenshotting and re-uploading
 
-These approaches create several problems:
+Each of these carries a real cost:
 
-### Too many steps
+**Too many steps.** Moving a URL from phone to laptop means switching apps, finding the right chat, sending, switching apps again, and copying it back out.
 
-Moving a simple URL from a phone to a laptop can require opening another application, finding the correct chat, sending the URL, reopening the application on the laptop, and copying it again.
+**Account dependency.** Most cross-device tools require the same cloud account everywhere — unworkable on shared desktops, labs, public computers, meeting rooms, or a client's machine.
 
-### Account dependency
+**Internet dependency.** Most of these tools stop working the moment internet access is weak, a device is briefly offline, two devices sit on different networks, or a firewall blocks the connection.
 
-Most cross-device tools require the user to sign into the same cloud account on every device.
+**No device-level addressing.** Notes apps organize around documents, not devices. There's no natural way to say "send this to my laptop" or "queue this file for the desktop when it's back online."
 
-This is undesirable for:
-
-* Shared desktops
-* Labs
-* Public computers
-* Meeting rooms
-* Temporary workstations
-* Client machines
-
-### Internet dependency
-
-Most applications stop working when:
-
-* Internet access is weak
-* One device temporarily disconnects
-* Devices are on different networks
-* Corporate firewalls block connections
-* Users intentionally want local-only communication
-
-### No device-level addressing
-
-Existing notes tools organize information around documents.
-
-They do not naturally support:
-
-```text
-Send this code snippet to my laptop.
-
-Place this checklist on the lab screen.
-
-Open this URL on the meeting room display.
-
-Queue this file for the desktop when it comes online.
-```
-
-### Poor support for temporary information
-
-Many cross-device transfers are not permanent documents.
-
-They are temporary objects such as:
-
-* OTPs
-* Links
-* Error messages
-* Terminal commands
-* Screenshots
-* API responses
-* Addresses
-* Meeting notes
-* Small files
-* Debug logs
-
-A full note-taking or storage system is excessive for these tasks.
+**Poor fit for temporary information.** OTPs, links, error messages, terminal commands, screenshots, API responses, debug logs — none of these deserve a permanent note or a full storage system. They need to move once and then, ideally, disappear.
 
 ---
 
-# 4. Why Does This Need to Exist?
+# 4. Why This Needs to Exist
 
-The operating-system ecosystem is fragmented.
+Continuity exists inside single ecosystems — Apple devices, or a single OEM's Android lineup — but there is no open, cross-platform handoff layer that works across Android, Windows, Linux, macOS, browser sessions, and shared or temporary machines.
 
-Apple provides strong continuity inside Apple devices.
-
-Android and Windows provide some cross-device features.
-
-Individual manufacturers such as Samsung, Huawei, Xiaomi, and OPPO provide proprietary device ecosystems.
-
-But there is no reliable, open, cross-platform handoff layer that works across:
-
-* Android
-* Windows
-* Linux
-* macOS
-* Browser sessions
-* Shared computers
-* Temporary displays
-
-ScreenMesh fills this gap by separating the application from the underlying connection method.
-
-The product does not ask:
-
-> Are these devices connected through Bluetooth?
-
-It asks:
-
-> What is the best available route between these devices right now?
-
-That route could be:
-
-* Local Wi-Fi
-* WebRTC
-* WebSocket relay
-* Bluetooth through a native companion
-* Wi-Fi Direct
-* Nearby Connections
-* QR transfer
-* NFC pairing
-* Optical transfer
-* Store-and-forward synchronization
+ScreenMesh closes that gap by separating the application from the connection method underneath it. It never asks "are these devices on Bluetooth?" — it asks "what's the best available route between these two devices right now?" That route might be local Wi-Fi, WebRTC, a relay, Bluetooth LE, Wi-Fi Direct, NFC, near-ultrasonic audio, or a store-and-forward hop through a third device — the application layer never needs to know which.
 
 ---
 
-# 5. Main Product Experience
+# 5. Product Experience
 
-## Example 1: Phone to laptop
+## Phone to laptop
 
-The user opens ScreenMesh on a laptop.
+The laptop shows a pairing QR. The phone scans it; the devices pair. The user copies a URL on the phone and taps **Send to Nidhi's Laptop** — it appears instantly, ready to open, copy, pin, delete, or forward.
 
-The laptop displays:
+## Laptop is offline
 
-```text
-Pair a device
+The phone shows **Queued for Nidhi's Laptop — waiting for connection**. The note sits encrypted in the phone's local outbox. The moment the laptop reconnects, it arrives — no retry, no re-send, nothing the user has to do.
 
-[QR code]
+## Shared lab desktop
 
-Workspace expires in 24 hours
-```
+The lab machine shows a temporary pairing QR; the user scans it and a short-lived workspace spins up. They send a GitHub URL, a terminal command, a config file. The lab desktop never touches the user's personal account, and the workspace can expire automatically at the end of the session.
 
-The user scans it using the phone.
+## Multi-screen workspace
 
-The devices become paired.
-
-The user copies a URL on the phone and selects:
-
-```text
-Send to Nidhi’s Laptop
-```
-
-The URL appears instantly on the laptop.
-
-The user can:
-
-* Open it
-* Copy it
-* Pin it
-* Delete it
-* Convert it into a note
-* Send it to another device
+Phone, laptop, tablet, and a projector all pair into one workspace. The phone drives; the laptop edits; the tablet holds reference material; the projector displays selected cards. An object can move phone → laptop → projector as naturally as dragging it across a desk.
 
 ---
 
-## Example 2: Laptop is offline
-
-The user sends a note to a laptop that is currently unavailable.
-
-The phone displays:
-
-```text
-Queued for Nidhi’s Laptop
-Waiting for connection
-```
-
-The note remains encrypted in the phone’s local outbox.
-
-When the laptop reconnects, the note is delivered automatically.
-
----
-
-## Example 3: Shared lab desktop
-
-The lab desktop opens ScreenMesh and shows a temporary pairing QR.
-
-The user scans it.
-
-A short-lived workspace is created.
-
-The user sends:
-
-* A GitHub URL
-* A terminal command
-* A configuration file
-* A code snippet
-
-The lab desktop never receives access to the user’s full personal account.
-
-The workspace can automatically expire after the session.
-
----
-
-## Example 4: Multi-screen workspace
-
-The user pairs:
-
-* Phone
-* Laptop
-* Tablet
-* Projector
-
-The phone acts as the control device.
-
-The laptop is the main editor.
-
-The tablet displays reference material.
-
-The projector displays selected cards.
-
-The user can move an object between surfaces:
-
-```text
-Phone → Laptop → Projector
-```
-
----
-
-# 6. How Does ScreenMesh Work?
-
-ScreenMesh has four technical layers.
+# 6. How It Works
 
 ```text
 ┌───────────────────────────────────────┐
@@ -331,34 +126,18 @@ ScreenMesh has four technical layers.
 │ Discovery, queueing, acknowledgements │
 ├───────────────────────────────────────┤
 │ Transport adapters                    │
-│ WebRTC, WebSocket, QR, Nearby, LAN     │
+│ WebRTC, WebSocket, BLE, Wi-Fi Direct, │
+│ NFC, acoustic, QR                     │
 └───────────────────────────────────────┘
 ```
 
----
+## Local-first storage
 
-## Layer 1: Local-first storage
+Every device keeps its own copy of the workspace it belongs to (IndexedDB via Dexie in the browser, an equivalent local snapshot on Android). The server is never the primary datastore — a device can create, edit, and queue objects entirely offline.
 
-Every device stores its own copy of the relevant workspace data.
+## Operation log
 
-The user can:
-
-* Create notes offline
-* Edit existing objects offline
-* Queue transfers offline
-* Read previously synchronized content offline
-
-Data is stored locally using IndexedDB.
-
-The server is not treated as the primary database for every interaction.
-
----
-
-## Layer 2: Operation log
-
-Instead of sending the entire workspace after every change, ScreenMesh records operations.
-
-Example:
+Rather than syncing whole documents, ScreenMesh records operations:
 
 ```json
 {
@@ -375,62 +154,22 @@ Example:
 }
 ```
 
-Other operation types include:
+Devices exchange only the operations they're missing:
 
 ```text
-CREATE_OBJECT
-UPDATE_OBJECT
-DELETE_OBJECT
-SEND_TO_DEVICE
-MARK_DELIVERED
-MARK_OPENED
-PIN_OBJECT
-MOVE_OBJECT
-ADD_ATTACHMENT
-REVOKE_DEVICE
+CREATE_OBJECT      UPDATE_OBJECT     DELETE_OBJECT
+SEND_TO_DEVICE     MARK_DELIVERED    MARK_OPENED
+REJECT_OBJECT      CARRY_BUNDLE      REVOKE_DEVICE
+CONTINUE_ON_DEVICE
 ```
 
-Devices exchange only the operations they are missing.
+## Conflict-free synchronization
 
----
+Two devices editing the same object while disconnected merge rather than overwrite. Editable text/code/link objects use Yjs (a CRDT); everything else uses last-write-wins, which is sufficient for objects that are sent and received rather than co-edited.
 
-## Layer 3: Conflict-free synchronization
+## Transport negotiation
 
-Two devices may edit the same note while disconnected.
-
-For example:
-
-```text
-Phone changes the title.
-Laptop changes the body.
-```
-
-When they reconnect, ScreenMesh should merge the changes rather than blindly overwriting one version.
-
-A CRDT library such as Yjs can manage this synchronization.
-
-The state eventually converges across all devices.
-
----
-
-## Layer 4: Transport negotiation
-
-ScreenMesh chooses the best available connection.
-
-Example priority:
-
-```text
-1. Direct local peer connection
-2. WebRTC peer-to-peer connection
-3. Internet relay
-4. Native nearby connection
-5. QR or file transfer
-6. Queue until a route becomes available
-```
-
-The application layer does not need to know whether an operation was delivered through WebRTC, WebSocket, or another adapter.
-
-Each transport implements the same interface:
+The application layer never knows or cares which transport actually carried a message — every adapter implements the same interface:
 
 ```ts
 interface MeshTransport {
@@ -444,651 +183,165 @@ interface MeshTransport {
 }
 ```
 
+A send prefers a direct WebRTC connection when both devices are online, falls back to the relay when it isn't, and — with no route at all — queues locally for delivery the moment one appears.
+
 ---
 
 # 7. Connection Methods
 
-## WebRTC
+**WebRTC** — direct browser-to-browser data channels for notes, clipboard items, images, files, and presence, whenever both devices can reach each other.
 
-Used for direct browser-to-browser communication.
+**WebSocket relay** — the fallback when direct peer-to-peer isn't possible: different networks, NAT, a reconnecting device. The relay authenticates every device with an Ed25519 challenge and forwards ciphertext only — it never has the keys to read what it's carrying.
 
-Best when:
+**QR pairing** — the trust ceremony. A single scan carries a workspace ID, a device identity, a single-use pairing token, and the workspace's key material. No accounts, no typed codes, works on nearly every phone.
 
-* Both devices are online
-* A direct peer connection can be established
-* Low-latency transfer is needed
+**Nearby transports (Android)** — Bluetooth LE (a real GATT peripheral+central pair, not a wrapper around a third-party SDK), Wi-Fi Direct (peer discovery plus a raw TCP socket for higher-throughput transfer), NFC tap-to-pair, and a near-ultrasonic acoustic transport for when there's no radio available at all. BLE and NFC double as pairing bootstraps — both just move the same pairing-code string a QR carries.
 
-Used for:
-
-* Notes
-* Clipboard items
-* Images
-* Files
-* Presence updates
-
----
-
-## WebSocket relay
-
-Used when direct peer-to-peer communication is unavailable.
-
-The server temporarily forwards encrypted messages.
-
-The server should not need access to plaintext user content.
-
-Best when:
-
-* Devices are on different networks
-* Corporate NAT prevents direct connection
-* One device is reconnecting
-* Reliable delivery is more important than pure P2P
-
----
-
-## QR pairing
-
-QR is used to exchange:
-
-* Workspace ID
-* Device identity
-* Public key
-* Pairing secret
-* Expiry
-* Signaling information
-
-QR pairing is ideal because it is:
-
-* Cross-platform
-* Easy to understand
-* Accountless
-* Explicitly authorized
-* Available on almost every phone
-
----
-
-## QR offline transfer
-
-For small objects, ScreenMesh can encode encrypted data into one or more QR frames.
-
-Useful when:
-
-* There is no internet
-* Devices cannot connect directly
-* A small message must be transferred immediately
-
-This should initially support:
-
-* Text
-* URLs
-* Pairing credentials
-* Small synchronization bundles
-
----
-
-## Native nearby adapter
-
-A later Android or desktop companion can provide access to:
-
-* Google Nearby Connections
-* Wi-Fi Direct
-* Wi-Fi Aware
-* Bluetooth Low Energy
-* Local LAN discovery
-
-The native application acts as a bridge while the PWA remains the primary interface.
-
----
-
-## Store–carry–forward delivery
-
-This is one of the main differentiators.
-
-When the destination is unavailable, ScreenMesh stores the encrypted object.
-
-Later, another trusted device can carry it.
-
-Example:
+**Store–carry–forward** — the most distinctive piece. When the destination is offline, the sender's device holds an encrypted delivery bundle. Any other online, trusted device that later encounters the real destination can carry that bundle forward and hand it off — without ever being able to decrypt it itself, since the payload is only ever readable by the true destination's own Double Ratchet session.
 
 ```text
-Phone sends note to Laptop.
-
+Phone sends a note to Laptop.
 Laptop is offline.
-
-Phone synchronizes with Tablet.
-
+Phone syncs with Tablet — Tablet holds the encrypted bundle.
 Tablet later connects to Laptop.
-
-Laptop receives the note.
+Laptop receives and decrypts the note. Tablet never could.
 ```
 
-The tablet does not need to read the note.
-
-It only carries an encrypted bundle.
-
-Each bundle includes:
-
-```ts
-interface DeliveryBundle {
-  bundleId: string;
-  sourceDeviceId: string;
-  destinationDeviceId: string;
-  workspaceId: string;
-  encryptedPayload: Uint8Array;
-  createdAt: number;
-  expiresAt: number;
-  hopLimit: number;
-  signature: Uint8Array;
-}
-```
-
-This creates an intermittent personal network where information can move even without continuous connectivity.
+This turns a set of devices that are rarely all online at once into something that still behaves like one connected personal network.
 
 ---
 
 # 8. Core Features
 
-## A. Device pairing
+**Device pairing** — QR code, BLE, NFC, all sharing one pairing-code format and one trust ceremony.
 
-Users can pair devices through:
+**Device dashboard** — live presence, transport in use, last-seen time, pending deliveries, per-device trust status.
 
-* QR code
-* Short pairing code
-* Shared link
-* Nearby discovery
-* NFC in future
-* Optical or acoustic pairing experiments
+**Device inbox** — every object a device has received, actionable in place: open, copy, save, forward, convert, pin, delete.
 
-Pairing establishes trust between devices.
+**Send to device** — target one device, several, or all, with delivery options: deliver on reconnect, expire after a duration, delete after opening, require explicit confirmation before the recipient can act on it.
 
----
+**Shared scratchpad** — a card-based board rather than a long document, better suited to quick cross-device work than a traditional notes editor.
 
-## B. Device dashboard
+**Universal clipboard** — copy on one device, explicitly send it, paste on another. User-triggered rather than continuously synced, since browser clipboard access is permission-gated.
 
-The user sees every paired device.
+**Continue on another device** — hand an object off and have the target device open it with the cursor exactly where it was left.
 
-```text
-Devices
+**Offline editing** — full read/write/queue capability with no connection at all, with a clear local status: *Saved locally — 4 operations waiting to sync.*
 
-● Nidhi’s Laptop
-  Online · WebRTC
+**Delivery lifecycle** — every send moves through `queued → sending → delivered → opened`, visible to the sender in real time.
 
-● Pixel Phone
-  This device
+**Temporary workspaces** — short-lived rooms with an expiry, useful for hackathons, classrooms, labs, and shared machines. They vanish on their own; no cleanup, no lingering account.
 
-○ Lab Desktop
-  Offline · Last seen 2 hours ago
+**Device roles** — a phone as input, a laptop as editor, a projector as display-only, a tablet as a relay/carrier, a lab machine as a restricted shared terminal.
 
-● Tablet
-  Online · Local network
-```
+**Privacy controls** — per-workspace policy (local-only, direct-preferred, relay-allowed, trusted-devices-only), plus instant device revocation that cuts relay access immediately.
 
-Each device shows:
+**Expiring objects** — content that disappears after a duration, after being opened, when the workspace ends, or at a fixed time — right for OTPs, debug output, and anything sensitive that shouldn't linger.
 
-* Online or offline status
-* Last active time
-* Available transport
-* Pending deliveries
-* Device role
-* Trust status
+**File and screenshot handoff** — photos, screenshots, PDFs, small files, and logs move phone-to-laptop directly; anything larger than a normal envelope automatically chunks into a sequence of smaller, independently-deliverable pieces.
+
+**Command objects** — a command received on another device is a card with explicit actions (copy, open terminal, mark executed), never auto-run. A trusted desktop agent can go one step further and execute a command, but only behind an interactive approval prompt.
 
 ---
 
-## C. Device inbox
+# 9. Developer-Focused Use
 
-Every device has an inbox.
+The first audience is developers working across several devices:
 
-Example:
-
-```text
-Laptop Inbox
-
-1. GitHub repository URL
-2. Docker command
-3. Screenshot from phone
-4. API response
-5. Pending checklist
-```
-
-Objects can be:
-
-* Opened
-* Copied
-* Saved
-* Forwarded
-* Converted
-* Deleted
-* Pinned
+* **Mobile testing** — screenshot and logs from a test phone straight to the laptop debugging it.
+* **Remote commands** — a command found while reading docs on a phone, thrown to the laptop's terminal.
+* **Shared debugging** — phone, tablet, and laptop all contributing logs and screenshots to one workspace.
+* **Lab environments** — repos, commands, and config sent to a shared machine without signing anything into it.
+* **Demo sessions** — a phone driving what a presentation screen shows.
 
 ---
 
-## D. Send to device
+# 10. Scope
 
-Every object has a device selector.
+## In scope
 
-```text
-Send to:
+**Pairing** — temporary or persistent workspaces, QR/BLE/NFC pairing, accountless device identity, instant revocation.
 
-✓ Nidhi’s Laptop
-○ Tablet
-○ Lab Desktop
-○ All devices
-```
+**Objects** — text, links, code, images, small files (with chunking for larger ones), checklists.
 
-The user can also set:
+**Sync** — local-first storage, real-time relay sync, WebRTC direct transfer, an offline operation queue, reconnection and reconciliation, CRDT-merged editing.
 
-```text
-Deliver when device returns
-Expire after 1 hour
-Delete after opening
-Require confirmation
-```
+**Device interactions** — device list, inbox, send-to-device/all, continue-on-device, delivery status.
 
----
+**Security** — end-to-end encryption with per-message forward secrecy, signed and replay-protected messages, instant device revocation.
 
-## E. Shared scratchpad
+## Deliberately out of scope
 
-All connected devices can contribute to a temporary board.
-
-The board contains cards rather than long documents.
-
-Cards may be:
-
-* Text
-* Code
-* Links
-* Images
-* Files
-* Checklists
-* Voice notes
-
-This makes the product more suitable for quick cross-device work than a traditional notes editor.
-
----
-
-## F. Universal clipboard
-
-ScreenMesh can provide a controlled shared clipboard.
-
-The user copies something on one device and explicitly shares it.
-
-Examples:
-
-```text
-Copy on phone → Paste on laptop
-Copy error on laptop → Open on tablet
-Copy address on laptop → Open maps on phone
-```
-
-Initially, clipboard capture should be user-triggered because browser clipboard access is permission-restricted.
-
-A browser extension or native companion can later provide deeper clipboard integration.
-
----
-
-## G. Continue on another device
-
-Every object can be handed off.
-
-Example:
-
-```text
-Continue editing on:
-
-Nidhi’s Laptop
-```
-
-The target device opens the exact object and places the cursor at the last editing position.
-
----
-
-## H. Offline editing
-
-The application works without internet.
-
-The user can:
-
-* Create notes
-* Edit cards
-* Queue deliveries
-* Browse cached objects
-* Export synchronization bundles
-
-The system displays clear status:
-
-```text
-Saved locally
-4 operations waiting to sync
-```
-
----
-
-## I. Delivery states
-
-Each sent object has a clear lifecycle.
-
-```text
-Created
-Queued
-Sending
-Delivered
-Opened
-Acknowledged
-Expired
-Failed
-```
-
-Example:
-
-```text
-Docker command
-Delivered to Nidhi’s Laptop
-Opened 20 seconds ago
-```
-
----
-
-## J. Temporary workspaces
-
-Users can create temporary rooms.
-
-```text
-Workspace: Hackathon Table 4
-Expires: In 6 hours
-Members: 5 devices
-```
-
-Temporary workspaces are useful for:
-
-* Hackathons
-* Classrooms
-* Meetings
-* Labs
-* Pair programming
-* Events
-* Workshops
-
-They can expire automatically without leaving permanent accounts or data.
-
----
-
-## K. Device roles
-
-Each device can be assigned a role.
-
-### Input device
-
-Used for capturing text, images, and commands.
-
-Typical device: phone.
-
-### Editor
-
-Used for detailed editing.
-
-Typical device: laptop.
-
-### Display
-
-Used only for showing selected cards.
-
-Typical device: projector or TV.
-
-### Relay
-
-Carries encrypted bundles between devices.
-
-Typical device: tablet or personal server.
-
-### Shared terminal
-
-Receives temporary commands or files with restricted permissions.
-
-Typical device: lab desktop.
-
----
-
-## L. Privacy controls
-
-Each workspace can be configured as:
-
-```text
-Local only
-Direct connections preferred
-Encrypted relay allowed
-Trusted devices only
-Temporary guests allowed
-```
-
-Users can revoke devices at any time.
-
-Revocation prevents the device from receiving future workspace keys.
-
----
-
-## M. Expiring objects
-
-Temporary information should not remain forever.
-
-Objects may expire:
-
-```text
-After 10 minutes
-After 1 hour
-After being opened
-When workspace ends
-At a specific time
-Never
-```
-
-This is useful for:
-
-* Temporary links
-* OTPs
-* Debug information
-* Sensitive snippets
-* Meeting-room content
-
----
-
-## N. File and screenshot handoff
-
-The phone can send:
-
-* Camera photos
-* Screenshots
-* PDFs
-* Small files
-* Logs
-
-The laptop can receive and download them immediately.
-
-Large files may transfer directly peer-to-peer when possible.
-
----
-
-## O. Command objects
-
-Developer-focused commands can be treated differently from ordinary text.
-
-Example:
-
-```text
-pnpm run dev
-```
-
-The laptop receives it as a command card with actions:
-
-```text
-Copy command
-Open terminal
-Save to history
-Mark as executed
-```
-
-For security, ScreenMesh should not execute commands automatically during the MVP.
-
-Later, a trusted desktop agent may support controlled execution.
-
----
-
-# 9. Developer-Focused Initial Version
-
-The first target users should be developers working across multiple devices.
-
-## Common developer workflows
-
-### Mobile testing
-
-A developer sees an error on a test phone.
-
-They send the screenshot and device logs directly to the laptop.
-
-### Remote commands
-
-A developer finds a command or configuration while reading documentation on the phone.
-
-They throw it to the laptop.
-
-### Shared debugging
-
-A phone, tablet, and laptop contribute logs and screenshots to the same debugging workspace.
-
-### Lab environments
-
-A developer sends repositories, commands, and configuration snippets to a temporary lab computer without signing into personal messaging applications.
-
-### Demo sessions
-
-A phone controls what appears on a presentation screen.
-
----
-
-# 10. MVP Scope
-
-The MVP should prove the cross-device handoff experience.
-
-## MVP features
-
-### Authentication and pairing
-
-* Temporary workspace creation
-* QR pairing
-* Device identity
-* Device revocation
-* Optional accountless session
-
-### Objects
-
-* Text
-* Links
-* Code snippets
-* Images
-* Small files
-* Checklists
-
-### Synchronization
-
-* Local IndexedDB storage
-* Real-time WebSocket synchronization
-* WebRTC direct transfer
-* Offline operation queue
-* Reconnection and reconciliation
-* Basic CRDT editing
-
-### Device interactions
-
-* Device list
-* Device inbox
-* Send to device
-* Send to all
-* Continue on device
-* Delivery status
-
-### Security
-
-* Client-side workspace encryption
-* Expiring workspace keys
-* Signed device messages
-* Device revocation
-
----
-
-# 11. What Should Not Be in the First Version?
-
-Avoid building these initially:
-
-* Full Notion-style editor
+* A full Notion-style editor
 * Complex team administration
 * AI summarization
-* Automatic command execution
+* Automatic (unapproved) command execution
 * Bluetooth-only communication
 * UWB positioning
 * Invisible optical transfer
 * Large-scale mesh routing
-* Native applications for every platform
 * Permanent file storage
-* Social collaboration
-* Public note publishing
+* Public note publishing or social collaboration
 
-These features would distract from validating the core interaction:
+These would all distract from the one question that matters:
 
 > Can a user move temporary information across devices faster and more naturally than sending it to themselves?
 
 ---
 
-# 12. Technical Stack
+# 11. Technical Stack
 
-## PWA frontend
+## Frontend
 
 ```text
-React
-TypeScript
-Vite or Next.js
-Service worker
-Web App Manifest
-IndexedDB
-Dexie
+React · TypeScript · Vite
+Service worker · Web App Manifest
+IndexedDB via Dexie
 Yjs
-WebRTC
-WebSocket
+WebRTC · WebSocket
 ```
 
 ## Backend
 
 ```text
-FastAPI, Hono, or Fastify
-PostgreSQL
-Redis
-WebSocket signaling
-S3-compatible object storage
-coturn
+Fastify
+@fastify/websocket for relay signaling
 ```
+
+Deliberately lean: no PostgreSQL, no Redis, no S3-compatible storage. The server was never meant to be the primary datastore — workspace and device state live in memory, and files never rest on the server in plaintext or otherwise, since they travel end-to-end encrypted the same way any other object does.
+
+## Native Android
+
+```text
+Kotlin · BouncyCastle (Ed25519/X25519/HKDF)
+javax.crypto (AES-GCM) · OkHttp
+android.bluetooth · WifiP2pManager · NFC (NDEF)
+```
+
+A hand-ported mirror of the same protocol, crypto, sync, and transport layers — not a thin wrapper around the web app — so a phone speaks the exact same wire protocol as the browser and desktop.
 
 ## Local persistence
 
 ```text
-IndexedDB
-Yjs document updates
-Pending delivery queue
-Encrypted object cache
-Device metadata
+IndexedDB (Dexie) — web, agent
+SharedPreferences-backed snapshot — Android
+Yjs document state · pending delivery queue · encrypted object cache
 ```
 
 ## Cryptography
 
 ```text
-Web Crypto API
-Ed25519 device signatures
+Web Crypto API (browser/agent) · BouncyCastle (Android)
+Ed25519 device identity and signatures
 X25519 key agreement
-AES-GCM or ChaCha20-Poly1305 payload encryption
-Rotating workspace keys
+AES-GCM payload encryption
+Per-pair Double Ratchet sessions for forward secrecy
 ```
-
-Browser compatibility may affect the exact cryptographic primitives, so using a reviewed cross-platform library may be preferable to implementing custom cryptography.
 
 ---
 
-# 13. Data Model
+# 12. Data Model
 
 ## Device
 
@@ -1155,48 +408,34 @@ interface Delivery {
 }
 ```
 
----
-
-# 14. Product Differentiation
-
-ScreenMesh is differentiated by five design decisions.
-
-## Device-first rather than document-first
-
-The user sends information to a screen or device, not merely to a shared folder.
-
-## Local-first rather than cloud-first
-
-Devices remain useful when internet access disappears.
-
-## Transport-independent
-
-The system can use multiple communication methods.
-
-## Temporary by default
-
-Objects and workspaces can expire rather than becoming permanent clutter.
-
-## Eventually deliverable
-
-Content can remain queued and reach its destination later.
+`type`/`role`/`status` fields are deliberately plain strings rather than closed enums, so the TypeScript and native ports can stay in sync without an enum-to-string mapping that could quietly drift between the two.
 
 ---
 
-# 15. Final Product Positioning
+# 13. Product Differentiation
 
-## One-line explanation
+**Device-first, not document-first.** Information is sent to a screen, not merely filed into a shared folder.
 
-> ScreenMesh lets you move notes, links, screenshots, files, and clipboard items between your devices, even when the devices are temporarily disconnected.
+**Local-first, not cloud-first.** Every device stays useful when the internet disappears.
 
-## More technical explanation
+**Transport-independent.** WebRTC, a relay, BLE, Wi-Fi Direct, NFC, or sound — whichever is available, chosen automatically.
 
-> ScreenMesh is a local-first, transport-independent device handoff layer that synchronizes encrypted objects across browsers, phones, laptops, and shared screens.
+**Temporary by default.** Objects and workspaces can expire instead of accumulating as permanent clutter.
 
-## Developer-focused pitch
+**Eventually deliverable.** Content can wait, encrypted, and still find its destination later — even by riding along on another device that happens to encounter it first.
 
-> ScreenMesh is a cross-device scratchpad for developers. Send commands, logs, links, screenshots, and files between phones, laptops, test devices, and lab machines without emailing or messaging yourself.
+---
 
-## Longer vision
+# 14. Product Positioning
 
-> Every screen around the user becomes part of one programmable personal workspace. Information is no longer trapped inside a specific application or device—it moves to the screen where it is needed through the best available route.
+**One line:**
+> Move notes, links, screenshots, files, and clipboard items between your devices — even when they're temporarily disconnected.
+
+**Technical:**
+> A local-first, transport-independent device handoff layer that synchronizes end-to-end encrypted objects across browsers, phones, laptops, and shared screens.
+
+**Developer pitch:**
+> A cross-device scratchpad for developers. Send commands, logs, links, screenshots, and files between phones, laptops, test devices, and lab machines — without emailing or messaging yourself.
+
+**Longer vision:**
+> Every screen around a user becomes part of one programmable personal workspace. Information isn't trapped inside a specific app or device — it moves to whichever screen needs it, through whatever route is currently open.

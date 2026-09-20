@@ -1,23 +1,10 @@
-Yes—but the precise term should be:
+# The Secure Device Bus
+
+ScreenMesh's notes-and-clipboard interface is the visible surface. Underneath it is something more specific:
 
 > **An end-to-end encrypted application-layer tunnel between trusted devices.**
 
-Not a full VPN or generic network tunnel.
-
-## What the tunnel carries
-
-It securely transports ScreenMesh objects such as:
-
-* Notes
-* Clipboard content
-* Links
-* Files
-* Images
-* Commands
-* CRDT updates
-* Device-control events
-
-Conceptually:
+Not a VPN. Not a general network tunnel. A structured channel that carries exactly ScreenMesh's own objects — notes, files, clipboard content, commands, structured agent requests, CRDT updates, device-control events — and nothing else.
 
 ```text
 Phone
@@ -27,86 +14,21 @@ Phone
 Laptop
 ```
 
-The transport underneath may change:
-
-```text
-WebRTC
-WebSocket relay
-Local Wi-Fi
-Nearby Connections
-Bluetooth
-QR bundle
-```
-
-But the encrypted ScreenMesh channel remains the same.
+The transport underneath can change from one moment to the next — WebRTC, a WebSocket relay, local Wi-Fi, Bluetooth LE, Wi-Fi Direct, NFC, near-ultrasonic audio, a QR-encoded bundle — but the encrypted channel riding on top of it stays the same regardless.
 
 ---
 
-## What makes it secure
+## What makes the tunnel secure
 
-### 1. Device identity
+**Device identity.** Every device generates its own keypair locally — the private key never leaves the device. Pairing exchanges public keys, a device ID, a workspace ID, and a short-lived pairing token, typically over a QR code.
 
-Each device generates its own cryptographic identity:
-
-```text
-private key → remains on device
-public key  → shared during pairing
-```
-
-When the phone pairs with the laptop, they verify each other’s identity.
-
-The QR code can contain:
+**End-to-end encryption.** The sender encrypts before handing anything to a transport. A relay forwarding a message only ever sees ciphertext — it cannot read notes, files, clipboard content, or commands, no matter which of the two parties it's forwarding for.
 
 ```text
-device ID
-public key
-ephemeral pairing token
-workspace ID
-expiry
+plaintext → encrypt on phone → relay / WebRTC / nearby transport → decrypt on laptop
 ```
 
----
-
-### 2. End-to-end encryption
-
-The sender encrypts data before handing it to the transport.
-
-```text
-plaintext
-   ↓
-encrypt on phone
-   ↓
-WebRTC / server relay / nearby connection
-   ↓
-decrypt on laptop
-```
-
-Even when a server relays the data, the server only sees ciphertext.
-
-```text
-Phone → encrypted bundle → relay server → Laptop
-```
-
-The relay cannot read:
-
-* Notes
-* Files
-* Clipboard data
-* Commands
-* Attachments
-
----
-
-### 3. Message authentication
-
-Each message is signed or authenticated so the receiver can verify:
-
-* Which device sent it
-* Whether it was modified
-* Whether it belongs to the correct workspace
-* Whether it has already been delivered
-
-A message envelope might contain:
+**Message authentication.** Every envelope is signed, so the receiver can verify who sent it, that it wasn't modified in transit, that it belongs to the right workspace, and whether it's already been seen:
 
 ```ts
 interface SecureEnvelope {
@@ -118,240 +40,109 @@ interface SecureEnvelope {
   createdAt: number;
   expiresAt?: number;
   sequenceNumber: number;
+  ratchetPublicKeyB64: string;
+  messageNumber: number;
+  previousChainLength: number;
   ciphertext: Uint8Array;
   signature: Uint8Array;
 }
 ```
 
----
+**Replay protection.** Unique message IDs, sequence numbers, expirations, and seen-message tracking mean an old command or message can't simply be resent later and re-applied — increasingly important as more of the tunnel carries structured commands rather than just notes.
 
-### 4. Replay protection
-
-An attacker should not be able to resend an old command or message.
-
-Use:
-
-* Unique message IDs
-* Sequence numbers
-* Expiration times
-* Nonces
-* Received-message tracking
-
-This is especially important if ScreenMesh later supports commands or automation.
+**Forward secrecy.** Each device pair runs its own Double Ratchet session — a fresh, single-use key per message, derived from a chain that steps forward with every exchange. A session bootstraps from each device's long-term identity key plus the pairing secret exchanged over the QR channel, so a relay that substitutes identity keys in transit still can't derive the session without that out-of-band secret. The session heals to fresh ephemeral key material after one round trip: a compromise of a device's current key doesn't expose messages already sent, and doesn't expose anything the pair exchanges going forward. Sessions are strictly pairwise, so revoking one device never requires rekeying anyone else's conversation.
 
 ---
 
-### 5. Forward secrecy
+## Direct, relayed, and store-and-forward modes
 
-Ideally, devices periodically rotate session keys.
-
-That means compromising the current key should not expose all previous communication.
-
-For a serious implementation, use a reviewed protocol rather than inventing your own cryptography.
-
-Possible directions:
-
-* Noise Protocol Framework
-* Double Ratchet-style sessions
-* MLS for multi-device rooms
-* libsodium primitives
-
----
-
-# Direct and relayed tunnel modes
-
-## Direct mode
-
-Devices communicate peer-to-peer:
+**Direct.** Devices talk peer-to-peer over WebRTC. Lower latency, no server in the payload path, best for local transfer and larger files — though peer-to-peer still reveals network-level metadata to the other party, encryption or not.
 
 ```text
 Phone ─────────── Laptop
        WebRTC
 ```
 
-Benefits:
-
-* Lower latency
-* Server does not carry payloads
-* Good for local transfer
-* Better for large files
-
-However, peer-to-peer does not automatically mean anonymous or metadata-free. Devices may still reveal network information to each other.
-
----
-
-## Relayed mode
-
-A server forwards encrypted packets:
+**Relayed.** A server forwards encrypted packets when direct connection fails — different networks, restrictive NAT, a device that's mid-reconnect.
 
 ```text
 Phone → Relay → Laptop
 ```
 
-Benefits:
+The relay can still see metadata it never needed for content — device identifiers, message size, timing, source IP, destination workspace. Payload encryption protects content; it doesn't erase metadata.
 
-* Works across restrictive networks
-* Supports offline queues
-* More reliable
-* Destination can reconnect later
-
-The server may still know metadata such as:
-
-* Device identifiers
-* Message size
-* Delivery time
-* Source IP
-* Destination workspace
-
-Payload encryption does not automatically hide metadata.
-
----
-
-## Store-and-forward mode
-
-The encrypted tunnel can continue asynchronously.
+**Store-and-forward.** The tunnel doesn't require both ends to be online at once. A message can sit encrypted — on the sender's device, on the relay's offline queue, or carried by a third trusted device that happens to encounter the true destination first — and still arrive once a path opens, without a live connection ever existing between sender and receiver.
 
 ```text
 Phone
   ↓ encrypted bundle
-Relay or trusted carrier
-  ↓ later
+Relay, or a trusted device that later meets the destination
+  ↓ eventually
 Laptop
 ```
 
-The devices do not need to be online simultaneously.
-
-That is a useful distinction from normal secure messaging channels.
+This is the meaningful departure from ordinary secure messaging: most systems assume a session; this one assumes devices meet each other intermittently, and treats that as the normal case rather than a failure mode.
 
 ---
 
-# What it is not
+## What this is not
 
-ScreenMesh should not initially claim to be:
-
-* A VPN
-* A replacement for SSH
-* A general TCP tunnel
-* A Tor-style anonymous network
-* A secure remote desktop protocol
-* A zero-metadata messaging system
-* A replacement for Signal
-
-A VPN tunnels arbitrary IP traffic:
+ScreenMesh is not a VPN, not a Tor-style anonymous network, not a general TCP tunnel, not a remote-desktop protocol, and not a zero-metadata messaging system. A VPN tunnels arbitrary traffic — browser, git, SSH, database, anything. ScreenMesh tunnels only its own structured objects:
 
 ```text
-Browser
-Git
-SSH
-Database
-Any application
-    ↓
-VPN tunnel
+Browser, git, SSH, database, any application     Notes, files, clipboard, commands, workspace events
+                ↓                                                    ↓
+            VPN tunnel                                  ScreenMesh secure channel
 ```
 
-ScreenMesh tunnels only its own structured protocol:
-
-```text
-Notes
-Files
-Clipboard
-Commands
-Workspace events
-    ↓
-ScreenMesh secure channel
-```
-
-Therefore the accurate positioning is:
-
-> **A secure cross-device handoff channel, not a general-purpose network tunnel.**
+The accurate framing: **a secure cross-device handoff channel, purpose-built for one kind of traffic, not a general-purpose network.**
 
 ---
 
-# Where this becomes more powerful
+## What the secure channel already unlocks
 
-Once the secure device channel exists, you can build capabilities beyond notes.
+Once devices share a trusted, encrypted channel, capabilities beyond plain notes fall out of it almost for free:
 
-## Secure file drop
+**Secure file drop** — files move directly between trusted devices, chunked transparently above a size threshold, never resting in plaintext on any server.
 
-Send files directly between trusted devices without uploading plaintext to cloud storage.
+**Temporary clipboard tunnel** — copy on one device, make it available on another for a set window, then it's gone. No separate mechanism: this composes directly from expiring objects plus delete-after-opening.
 
-## Temporary clipboard tunnel
-
-Share clipboard content for five minutes and erase it afterward.
-
-## Developer command channel
-
-Send a command from phone to laptop, but require explicit approval before execution.
+**Developer command channel** — a command sent from phone to laptop arrives as a card, not an execution:
 
 ```text
-Incoming command from Nidhi’s Phone
+Incoming command from Nidhi's Phone
 
 pnpm run integration-test
 
 [Reject] [Copy] [Run]
 ```
 
-## Local agent communication
+Nothing runs without an explicit, interactive approval on the receiving end.
 
-An AI agent on the phone can send a structured task to an agent on the laptop.
+**Structured agent-to-agent tasks** — an agent on one device can hand a structured request to an agent on another (`{action, params}` against a small, deliberately closed handler registry, not an open plugin surface), behind the same approval gate as any other command, replying with an ordinary object.
 
-```json
-{
-  "type": "agent_task",
-  "action": "inspect_logs",
-  "repository": "playtrace",
-  "scope": "last_failed_run"
-}
-```
+**Temporary trusted sessions** — pair into a short-lived workspace on a shared or borrowed machine, move what's needed, and let the workspace expire on its own rather than requiring a manual teardown.
 
-## Secure lab sessions
+**Capability-based routing** — devices advertise what they can do (a terminal, a filesystem, a camera, a local model), and a send can target "whichever device currently has X" instead of naming one explicitly. This is a routing convenience among devices that are already paired and already trusted — not a privilege boundary, and it shouldn't be treated as one. A device's advertised capability is self-reported, not independently verified.
 
-Pair with a lab computer temporarily, transfer required materials, then destroy the session key when leaving.
-
-## Device capability invocation
-
-A device can expose selected capabilities:
-
-```text
-Phone:
-- camera
-- microphone
-- GPS
-
-Laptop:
-- terminal
-- filesystem
-- browser
-- local models
-```
-
-ScreenMesh could securely route a request to the device that has the needed capability.
-
-That moves the product from shared notes toward a:
-
-> **Secure personal device bus.**
+None of the above required inventing a new trust model. They're all the same encrypted channel, aimed at a different kind of payload.
 
 ---
 
-# Strongest product framing
+## Where this actually goes next
 
-The notes interface is the first visible application.
+The tunnel described above is deliberately narrow in a few places — narrow on purpose, not by oversight. These are the real open directions:
 
-Underneath it, you are building:
+**Multi-device group sessions.** Sessions today are strictly pairwise. A protocol like MLS would let a workspace with many devices maintain one group-forward-secret session instead of N pairwise ones — worth revisiting once workspace sizes stop being small enough that pairwise sessions are simply the cheaper, simpler choice.
 
-```text
-Identity
-Pairing
-Encryption
-Device discovery
-Transport negotiation
-Reliable delivery
-Offline queueing
-Capability routing
-```
+**A published prekey bundle.** The current bootstrap is an "X3DH-lite": both sides seed their ratchet with long-term identity keys rather than fresh one-time prekeys, because a real one-time-prekey bundle needs server-side infrastructure that doesn't exist yet. A full X3DH would remove the small forward-secrecy gap that exists before a session's first round trip completes.
 
-So the deeper product is:
+**Spatial targeting.** UWB or Bluetooth Channel Sounding could let a user point a phone at a laptop to select it, with the actual payload still moving over whatever transport is already negotiated — targeting and transport staying cleanly separated.
 
-> **A secure, local-first communication fabric for a user’s devices.**
+**Optical and acoustic bootstrap, taken further.** An animated QR or a screen-camera link could carry pairing material without typing anything or granting Bluetooth permission; the near-ultrasonic transport that already exists could grow the same "bootstrap over one channel, transfer over a faster one" pattern instead of carrying real payloads itself.
 
-The note app is how you make that infrastructure immediately understandable and usable.
+**Metadata-hardening on the relay.** The relay already never sees plaintext; hiding message size, timing, and sender/recipient identity from it too is a meaningfully harder, and still open, problem.
+
+**A genuinely capability-verified routing layer.** Today's capability advertisement is trust-on-claim. A version that lets the requesting device confirm a capability actually exists before routing to it would turn a convenience into something closer to a real permission system.
+
+None of these are required to make the tunnel work — they're the directions that would make it work further, wider, or with fewer assumptions than it currently makes.
