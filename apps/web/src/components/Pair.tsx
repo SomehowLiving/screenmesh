@@ -9,12 +9,13 @@ import {
   type LocalIdentity,
   type LocalWorkspace,
 } from "../lib/app.js";
-import { Select } from "./ui/Select.js";
+import { Button } from "./ui/button.js";
+import { LockIcon } from "./mesh-icons.js";
 
 /**
  * Presentation-only masking of the join link: the real, fully-functional
- * URL is still what COPY ACCESS LINK puts on the clipboard and what the
- * QR encodes — this only changes what's rendered inline, so a raw
+ * URL is still what "Copy access link" puts on the clipboard and what
+ * the QR encodes — this only changes what's rendered inline, so a raw
  * "http://192.168.1.5:5173/#join=..." dev-server URL never has to be
  * shown to someone pairing a device.
  */
@@ -56,14 +57,7 @@ export function PairPanel(props: {
   async function regenerate(originOverride?: string) {
     try {
       setError(null);
-      setPairing(
-        await rotatePairing(
-          props.me,
-          props.workspace,
-          props.workspaceKey,
-          originOverride,
-        ),
-      );
+      setPairing(await rotatePairing(props.me, props.workspace, props.workspaceKey, originOverride));
       setCopied(false);
     } catch (err) {
       setError(`Could not create pairing code: ${err instanceof Error ? err.message : err}`);
@@ -72,31 +66,23 @@ export function PairPanel(props: {
 
   useEffect(() => {
     if (!isOwner) return;
-
     void listLanCandidates()
       .then((found) => {
         setCandidates(found);
         if (found[0]) setSelectedOrigin(found[0].origin);
       })
       .catch(() => {});
-
     if (!pairing) void regenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (canvasRef.current && joinUrl) {
-      void QRCode.toCanvas(canvasRef.current, joinUrl, {
-        width: 260,
-        margin: 2,
-        errorCorrectionLevel: "L",
-      });
+      void QRCode.toCanvas(canvasRef.current, joinUrl, { width: 240, margin: 2, errorCorrectionLevel: "L" });
     }
   }, [joinUrl]);
 
-  // Live self-destruct countdown — ticks off the real pairing.expiresAt,
-  // not a hardcoded "05:00" that would drift from the truth once a
-  // minute has actually passed.
+  // Live self-destruct countdown — ticks off the real pairing.expiresAt.
   useEffect(() => {
     if (!pairing) return;
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -105,77 +91,87 @@ export function PairPanel(props: {
 
   if (!isOwner) {
     return (
-      <div className="pair-content">
-        <div className="pair-warning">PAIRING CONTROLLED BY CHANNEL OWNER</div>
-        <p className="muted">
-          Only the channel owner can mint access codes. Ask the owner node to display its QR.
-        </p>
+      <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+        <p className="font-medium text-warning">Only the workspace owner can pair devices.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Ask the owner device to display its QR code.</p>
       </div>
     );
   }
 
   return (
-    <div className="pair-content">
-      {error && <div className="error-banner">{error}</div>}
+    <div>
+      {error && (
+        <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
 
-      <div className="pair-tabs">
-        <span className="pair-tab active">QR CODE</span>
-        <span className="pair-tab">MANUAL LINK</span>
-      </div>
-
-      <div className="pair-main">
-        <div className="qr-frame">
+      <div className="grid gap-5 sm:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="grid place-items-center rounded-lg border border-border bg-white p-3">
           {joinUrl && <canvas ref={canvasRef} />}
         </div>
 
-        <div className="pair-details">
-          <div className="pair-title">SCAN TO INFILTRATE</div>
-          <p className="muted">
-            Scan this QR code with the device you want to pair. The code is single-use and
-            self-destructs after its TTL.
-          </p>
+        <div className="space-y-3">
+          <div>
+            <p className="text-sm font-semibold">Connect a new screen</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Scan this QR code with the device you want to pair. The code is single-use and self-destructs after its TTL.
+            </p>
+          </div>
 
           {joinUrl && (
-            <div className="join-link">
-              <span title="The real link is copied — this display is masked for presentation.">
+            <div className="flex items-center rounded-md border border-input bg-background">
+              <span
+                className="min-w-0 flex-1 truncate px-3 py-2 font-mono text-xs text-muted-foreground"
+                title="The real link is copied — this display is masked for presentation."
+              >
                 {maskedAccessLink(joinUrl)}
               </span>
               <button
-                className="copy-btn"
+                type="button"
+                className="border-l border-border px-3 py-2 text-xs font-medium hover:bg-accent"
                 onClick={async () => {
                   await navigator.clipboard.writeText(joinUrl);
                   setCopied(true);
                 }}
               >
-                {copied ? "COPIED" : "COPY ACCESS LINK"}
+                {copied ? "Copied" : "Copy access link"}
               </button>
             </div>
           )}
 
-          <div className="pair-meta">
-            <span>● SINGLE USE</span>
-            <span>⌑ ENCRYPTED</span>
-            {pairing && <span>SELF-DESTRUCTS {formatCountdown(pairing.expiresAt - now)}</span>}
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-success" /> Single use</span>
+            <span className="flex items-center gap-1"><LockIcon className="size-3" /> Encrypted</span>
+            {pairing && <span>Self-destructs {formatCountdown(pairing.expiresAt - now)}</span>}
           </div>
 
           {candidates.length > 1 && (
-            <div className="network-select">
-              <label>ROUTE NETWORK</label>
-              <Select
-                ariaLabel="Network interface"
-                value={selectedOrigin}
-                onChange={setSelectedOrigin}
-                options={candidates.map((c) => ({ value: c.origin, label: `${c.name} — ${c.address}` }))}
-              />
-              <button className="ghost" onClick={() => void regenerate(selectedOrigin)}>
-                USE THIS NETWORK
-              </button>
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-muted-foreground">Network interface</label>
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="Network interface"
+                  value={selectedOrigin}
+                  onChange={(e) => setSelectedOrigin(e.target.value)}
+                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                >
+                  {candidates.map((c) => (
+                    <option key={c.origin} value={c.origin}>
+                      {c.name} — {c.address}
+                    </option>
+                  ))}
+                </select>
+                <Button size="sm" variant="outline" onClick={() => void regenerate(selectedOrigin)}>
+                  Use this network
+                </Button>
+              </div>
             </div>
           )}
 
-          <button className="rotate-btn ghost" onClick={() => void regenerate()}>
-            ↻ ROTATE KEY
-          </button>
+          <Button size="sm" variant="outline" onClick={() => void regenerate()}>
+            Rotate key
+          </Button>
         </div>
       </div>
     </div>

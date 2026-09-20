@@ -12,6 +12,8 @@ import type {
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
+import { Button } from "./ui/button.js";
+import { ActivityIcon, CommandIcon, LinkIcon } from "./mesh-icons.js";
 
 const EDITABLE_TYPES = new Set(["text", "code", "link"]);
 
@@ -59,6 +61,12 @@ function downloadFile(file: FileContent) {
   URL.revokeObjectURL(url);
 }
 
+function typeIcon(type: string) {
+  if (type === "command" || type === "agent_task") return <CommandIcon />;
+  if (type === "link") return <LinkIcon />;
+  return <ActivityIcon />;
+}
+
 /** Collaborative text editor: local keystrokes → debounced Yjs merge. */
 function TextEditor(props: {
   object: MeshObject;
@@ -83,24 +91,25 @@ function TextEditor(props: {
   }, []);
 
   return (
-    <div className="stack">
+    <div className="space-y-2">
       <textarea
         autoFocus
         value={draft}
         onChange={(e) => push(e.target.value)}
-        style={{ minHeight: "6rem" }}
+        className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
       />
-      <div className="actions">
-        <button
-          className="ghost"
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => {
             if (timer.current) clearTimeout(timer.current);
             void props.engine.editText(props.object.id, draft).then(props.onClose);
           }}
         >
           Done
-        </button>
-        <span className="muted">Edits merge across devices, even concurrent ones.</span>
+        </Button>
+        <span className="text-[11px] text-muted-foreground">Edits merge across devices, even concurrent ones.</span>
       </div>
     </div>
   );
@@ -116,9 +125,9 @@ function Checklist(props: { object: MeshObject; engine: MeshEngine }) {
   }
 
   return (
-    <div className="stack" style={{ margin: "0.4rem 0" }}>
+    <div className="space-y-1.5">
       {items.map((item) => (
-        <label className="check" key={item.id}>
+        <label key={item.id} className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={item.done}
@@ -129,21 +138,18 @@ function Checklist(props: { object: MeshObject; engine: MeshEngine }) {
                 ),
               })
             }
+            className="size-3.5 rounded-sm border-input accent-foreground"
           />
-          <span style={item.done ? { textDecoration: "line-through", opacity: 0.6 } : {}}>
-            {item.text}
-          </span>
+          <span className={item.done ? "text-muted-foreground line-through" : ""}>{item.text}</span>
         </label>
       ))}
       <form
-        style={{ display: "flex", gap: "0.4rem" }}
+        className="flex gap-2 pt-1"
         onSubmit={(e) => {
           e.preventDefault();
           const text = newItem.trim();
           if (!text) return;
-          save({
-            items: [...items, { id: crypto.randomUUID(), text, done: false }],
-          });
+          save({ items: [...items, { id: crypto.randomUUID(), text, done: false }] });
           setNewItem("");
         }}
       >
@@ -152,10 +158,11 @@ function Checklist(props: { object: MeshObject; engine: MeshEngine }) {
           placeholder="Add item…"
           value={newItem}
           onChange={(e) => setNewItem(e.target.value)}
+          className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
         />
-        <button className="ghost" type="submit" disabled={!newItem.trim()}>
+        <Button size="sm" variant="outline" type="submit" disabled={!newItem.trim()}>
           Add
-        </button>
+        </Button>
       </form>
     </div>
   );
@@ -165,6 +172,7 @@ export function InboxPanel(props: {
   db: ScreenMeshDb;
   me: LocalIdentity;
   engine: MeshEngine;
+  filter: string;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [continuedFrom, setContinuedFrom] = useState<string | null>(null);
@@ -194,6 +202,11 @@ export function InboxPanel(props: {
       : (devices.find((d) => d.id === id)?.name ?? "unknown device");
   const others: Device[] = devices.filter((d) => d.id !== props.me.deviceId);
 
+  const visible =
+    props.filter === "All objects"
+      ? objects
+      : objects.filter((o) => o.type === props.filter.toLowerCase());
+
   // Continue-on-device: another device asked us to open this object.
   useEffect(() => {
     const value = focus?.value as { objectId: string; from: string } | undefined;
@@ -213,168 +226,177 @@ export function InboxPanel(props: {
     }
   }
 
+  if (objects.length === 0) {
+    return <p className="py-8 text-center text-sm text-muted-foreground">Nothing here yet.</p>;
+  }
+  if (visible.length === 0) {
+    return <p className="py-8 text-center text-sm text-muted-foreground">No {props.filter.toLowerCase()} yet.</p>;
+  }
+
   return (
-    <section className="card">
-      <h2>Intercepted payloads</h2>
+    <div className="divide-y divide-border">
       {continuedFrom && (
-        <p className="muted">Handoff received from {continuedFrom}.</p>
+        <p className="py-3 text-xs text-muted-foreground">Continued here from {continuedFrom}.</p>
       )}
-      {objects.length === 0 && <p className="muted">No traffic yet.</p>}
-      <ul className="plain">
-        {objects.map((object) => {
-          const mine = object.createdBy === props.me.deviceId;
-          const delivery = mine ? undefined : deliveryByObjectId.get(object.id);
-          const pending = delivery?.status === "pending";
-          const file = isFileObject(object) ? (object.content as FileContent) : null;
-          const isChecklist = object.type === "checklist";
-          const isAgentTask = object.type === "agent_task";
-          const text =
-            file || isChecklist || isAgentTask ? null : textOf(object.content);
-          const editable = EDITABLE_TYPES.has(object.type);
-          const editing = editingId === object.id;
-          return (
-            <li
-              className="row"
-              key={object.id}
-              id={`obj-${object.id}`}
-              style={{ alignItems: "flex-start" }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="muted">
-                  <span className="badge">{object.type}</span>{" "}
-                  {mine ? "by me" : `from ${nameOf(object.createdBy)}`} ·{" "}
-                  {new Date(object.updatedAt).toLocaleTimeString()}
-                  {object.expiresAt !== undefined && (
-                    <> · {formatExpiry(object.expiresAt, Date.now())}</>
-                  )}
-                  {pending && <> · awaiting your confirmation</>}
-                </div>
-                {object.type === "image" && file && (
-                  <img
-                    src={`data:${file.mimeType};base64,${file.dataB64}`}
-                    alt={file.name}
-                    style={{ maxWidth: "100%", borderRadius: 8, margin: "0.4rem 0" }}
-                    onLoad={() => void markOpenedIfReceived(object)}
-                  />
-                )}
-                {file && (
-                  <p className="obj-text">
-                    {file.name} <span className="muted">({formatSize(file.size)})</span>
-                  </p>
-                )}
-                {isChecklist && !pending && <Checklist object={object} engine={props.engine} />}
-                {isAgentTask && (
-                  <p className="obj-text mono">
-                    {formatAgentTask(object.content as AgentTaskContent)}
-                  </p>
-                )}
-                {text !== null && !editing && (
-                  <p className={`obj-text ${object.type === "code" ? "mono" : ""}`}>
-                    {text}
-                  </p>
-                )}
-                {editing && editable && !pending && (
-                  <TextEditor
-                    object={object}
-                    engine={props.engine}
-                    onClose={() => {
-                      setEditingId(null);
-                      setContinuedFrom(null);
-                    }}
-                  />
-                )}
-                {pending ? (
-                  <div className="actions">
-                    <button onClick={() => void props.engine.acceptObject(object.id)}>
-                      Accept
-                    </button>
-                    <button
-                      className="ghost"
-                      onClick={() => void props.engine.rejectObject(object.id)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                ) : (
-                  <div className="actions">
-                    {editable && !editing && (
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          setEditingId(object.id);
-                          void markOpenedIfReceived(object);
-                        }}
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {file && (
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          downloadFile(file);
-                          void markOpenedIfReceived(object);
-                        }}
-                      >
-                        Download
-                      </button>
-                    )}
-                    {text !== null && (
-                      <button
-                        className="ghost"
-                        onClick={async () => {
-                          await navigator.clipboard.writeText(text);
-                          await markOpenedIfReceived(object);
-                        }}
-                      >
-                        {object.type === "clipboard" ? "Extract to clipboard" : "Copy"}
-                      </button>
-                    )}
-                    {object.type === "link" && text !== null && (
-                      <button
-                        className="ghost"
-                        onClick={() => {
-                          window.open(text, "_blank", "noopener");
-                          void markOpenedIfReceived(object);
-                        }}
-                      >
-                        Open
-                      </button>
-                    )}
-                    {others.length > 0 && (
-                      <select
-                        value=""
-                        onChange={(e) => {
-                          if (e.target.value) {
-                            void props.engine.continueOnDevice(object.id, e.target.value);
-                          }
-                          e.target.value = "";
-                        }}
-                      >
-                        <option value="" disabled>
-                          Continue on…
-                        </option>
-                        {others.map((device) => (
-                          <option key={device.id} value={device.id}>
-                            {device.name}
-                            {device.status === "offline" ? " (offline)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <button
-                      className="ghost"
-                      onClick={() => void props.engine.deleteObjectLocal(object.id)}
-                    >
-                      Purge
-                    </button>
-                  </div>
+      {visible.map((object) => {
+        const mine = object.createdBy === props.me.deviceId;
+        const delivery = mine ? undefined : deliveryByObjectId.get(object.id);
+        const pending = delivery?.status === "pending";
+        const file = isFileObject(object) ? (object.content as FileContent) : null;
+        const isChecklist = object.type === "checklist";
+        const isAgentTask = object.type === "agent_task";
+        const text = file || isChecklist || isAgentTask ? null : textOf(object.content);
+        const editable = EDITABLE_TYPES.has(object.type);
+        const editing = editingId === object.id;
+
+        return (
+          <article key={object.id} id={`obj-${object.id}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 py-5">
+            <div className="grid size-7 place-items-center rounded-md border border-border bg-card [&_svg]:size-3.5">
+              {typeIcon(object.type)}
+            </div>
+            <div className="min-w-0">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-[11px] font-medium capitalize">{object.type}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {mine ? "by me" : `from ${nameOf(object.createdBy)}`} · {new Date(object.updatedAt).toLocaleTimeString()}
+                  {object.expiresAt !== undefined && <> · {formatExpiry(object.expiresAt, Date.now())}</>}
+                </span>
+                {pending && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] text-warning">
+                    <span className="size-1 rounded-full bg-warning" /> Awaiting confirmation
+                  </span>
                 )}
               </div>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
+
+              {object.type === "image" && file && (
+                <img
+                  src={`data:${file.mimeType};base64,${file.dataB64}`}
+                  alt={file.name}
+                  className="mb-2 max-w-full rounded-md"
+                  onLoad={() => void markOpenedIfReceived(object)}
+                />
+              )}
+              {file && (
+                <p className="text-sm">
+                  {file.name} <span className="text-muted-foreground">({formatSize(file.size)})</span>
+                </p>
+              )}
+              {isChecklist && !pending && <Checklist object={object} engine={props.engine} />}
+              {isAgentTask && (
+                <div className="rounded-md bg-foreground px-3 py-2.5 font-mono text-xs text-primary-foreground">
+                  {formatAgentTask(object.content as AgentTaskContent)}
+                </div>
+              )}
+              {text !== null && !editing && (
+                <p className={`text-sm ${object.type === "code" ? "font-mono" : ""} whitespace-pre-wrap break-words`}>
+                  {text}
+                </p>
+              )}
+              {editing && editable && !pending && (
+                <TextEditor
+                  object={object}
+                  engine={props.engine}
+                  onClose={() => {
+                    setEditingId(null);
+                    setContinuedFrom(null);
+                  }}
+                />
+              )}
+
+              {pending ? (
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" onClick={() => void props.engine.acceptObject(object.id)}>
+                    Accept
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void props.engine.rejectObject(object.id)}>
+                    Reject
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {editable && !editing && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingId(object.id);
+                        void markOpenedIfReceived(object);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                  )}
+                  {file && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        downloadFile(file);
+                        void markOpenedIfReceived(object);
+                      }}
+                    >
+                      Download
+                    </Button>
+                  )}
+                  {text !== null && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(text);
+                        await markOpenedIfReceived(object);
+                      }}
+                    >
+                      {object.type === "clipboard" ? "Extract to clipboard" : "Copy"}
+                    </Button>
+                  )}
+                  {object.type === "link" && text !== null && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        window.open(text, "_blank", "noopener");
+                        void markOpenedIfReceived(object);
+                      }}
+                    >
+                      Open
+                    </Button>
+                  )}
+                  {others.length > 0 && (
+                    <select
+                      aria-label="Continue on device"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) void props.engine.continueOnDevice(object.id, e.target.value);
+                        e.target.value = "";
+                      }}
+                      className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="" disabled>
+                        Continue on…
+                      </option>
+                      {others.map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.name}
+                          {device.status === "offline" ? " (offline)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="ml-auto text-muted-foreground"
+                    onClick={() => void props.engine.deleteObjectLocal(object.id)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </div>
   );
 }

@@ -9,6 +9,8 @@ import {
   type LocalIdentity,
   type LocalWorkspace,
 } from "../lib/app.js";
+import { Button } from "./ui/button.js";
+import { DevicesIcon } from "./mesh-icons.js";
 
 const CAPABILITY_CHOICES: DeviceCapability[] = [
   "terminal",
@@ -22,19 +24,10 @@ const CAPABILITY_CHOICES: DeviceCapability[] = [
 
 function lastSeen(at: number): string {
   const mins = Math.round((Date.now() - at) / 60_000);
-  if (mins < 1) return "JUST NOW";
-  if (mins < 60) return `${mins}M AGO`;
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
   const hours = Math.round(mins / 60);
-  return hours < 24 ? `${hours}H AGO` : `${Math.round(hours / 24)}D AGO`;
-}
-
-function DeviceIcon({ type }: { type: string }) {
-  const icon =
-    type === "phone" ? "▯" :
-    type === "tablet" ? "▯" :
-    type === "desktop" || type === "display" ? "▱" :
-    "▱";
-  return <span className="device-icon">{icon}</span>;
+  return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
 export function DevicesPanel(props: {
@@ -48,25 +41,22 @@ export function DevicesPanel(props: {
   const carrying = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
   const [note, setNote] = useState<string | null>(null);
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
-  const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "OFFLINE NODE";
+  const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "an offline device";
 
   async function remove(deviceId: string, name: string) {
-    if (!window.confirm(`Revoke "${name}" from this channel? Access is cut immediately.`)) return;
+    if (!window.confirm(`Remove "${name}" from this workspace? It will lose access immediately.`)) return;
     try {
       setNote(null);
       await revokeDevice(props.me, props.workspace, props.engine, deviceId);
-      setNote(`${name} was revoked.`);
+      setNote(`${name} was removed.`);
     } catch (err) {
-      setNote(`Could not revoke node: ${err instanceof Error ? err.message : err}`);
+      setNote(`Could not remove device: ${err instanceof Error ? err.message : err}`);
     }
   }
 
   async function toggleCapability(cap: DeviceCapability) {
     const current = props.me.capabilities;
-    const next = current.includes(cap)
-      ? current.filter((c) => c !== cap)
-      : [...current, cap];
-
+    const next = current.includes(cap) ? current.filter((c) => c !== cap) : [...current, cap];
     try {
       const updated = await setCapabilities(props.db, props.me, props.workspace, next);
       props.onIdentityChange(updated);
@@ -76,123 +66,71 @@ export function DevicesPanel(props: {
   }
 
   const online = devices.filter((d) => d.status === "online");
-  const offline = devices.filter((d) => d.status !== "online");
-  const ordered = [...online, ...offline];
 
   return (
-    <div className="device-mesh">
-      <div className="mesh-count">
-        {online.length} ONLINE <span>/</span> {devices.length} NODES
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">{online.length} online · {devices.length} paired</p>
       </div>
 
-      <div className="mesh-stage">
-        <div className="mesh-rings" />
-
-        <div className="mesh-core">
-          <div className="core-lock">⌑</div>
-          <strong>SECURE MESH</strong>
-          <span>X25519 / AES-GCM</span>
-          <span>{online.length} NODES ACTIVE</span>
-        </div>
-
-        {ordered.slice(0, 4).map((device, index) => {
-          const positions = [
-            "node-top",
-            "node-left",
-            "node-right",
-            "node-bottom",
-          ];
-          return (
-            <div
-              className={`mesh-node ${positions[index] ?? "node-bottom"} ${
-                device.status === "online" ? "online" : "offline"
-              }`}
-              key={device.id}
-            >
-              <div className="node-connector" />
-              <div className="node-card">
-                <DeviceIcon type={device.type} />
-                <div className="node-info">
-                  <strong>{device.name}</strong>
-                  <span>{device.type.toUpperCase()}</span>
-                  <span className="node-state">
-                    <i className="status-led" />
-                    {device.status === "online" ? "ONLINE" : lastSeen(device.lastSeenAt)}
-                  </span>
-                </div>
+      {devices.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          No devices paired yet — use "Pair device" to add one.
+        </p>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {devices.map((device) => (
+            <div key={device.id} className="flex items-center gap-3 rounded-md border border-border bg-card p-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border bg-background">
+                <DevicesIcon className="size-4 text-muted-foreground" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">
+                  {device.name}
+                  {device.id === props.me.deviceId && <span className="ml-1.5 text-xs text-muted-foreground">(this device)</span>}
+                </p>
+                <p className="truncate text-xs text-muted-foreground capitalize">
+                  {device.type} · {device.status === "online" ? "Online" : lastSeen(device.lastSeenAt)}
+                </p>
               </div>
-              {index < 3 && (
-                // No measured per-connection latency is exposed by DevicesPanel's
-                // API yet (see the redesign README) — "LIVE" rather than a
-                // fabricated number, so this never claims a precision we don't have.
-                <span className="latency">
-                  {device.status === "online" ? "LIVE" : "QUEUED"}
-                </span>
+              <span className={`size-1.5 shrink-0 rounded-full ${device.status === "online" ? "bg-success" : "bg-muted-foreground/45"}`} />
+              {isOwner && device.id !== props.me.deviceId && (
+                <Button size="sm" variant="ghost" onClick={() => void remove(device.id, device.name)}>
+                  Remove
+                </Button>
               )}
             </div>
-          );
-        })}
+          ))}
+        </div>
+      )}
 
-        {devices.length === 0 && (
-          <div className="empty-mesh">
-            <span>NO NODES</span>
-            <small>PAIR A DEVICE TO INITIALIZE THE MESH</small>
-          </div>
-        )}
+      <div className="rounded-md border border-border bg-card p-4">
+        <p className="text-sm font-medium">This device's capabilities</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Lets others route a send to "whichever device has X" instead of naming this device directly.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+          {CAPABILITY_CHOICES.map((cap) => (
+            <label key={cap} className="flex items-center gap-1.5 text-sm">
+              <input
+                type="checkbox"
+                checked={props.me.capabilities.includes(cap)}
+                onChange={() => void toggleCapability(cap)}
+                className="size-3.5 accent-foreground"
+              />
+              {cap}
+            </label>
+          ))}
+        </div>
       </div>
 
-      <div className="mesh-footer">
-        <div>
-          <span className="status-led" /> E2EE ACTIVE
-          <small>All traffic is encrypted at the application layer.</small>
-        </div>
-        <div className="mesh-route">ROUTING :: AUTO / MULTI-TRANSPORT</div>
-      </div>
-
-      <details className="mesh-advanced">
-        <summary>NODE CAPABILITIES / ADMINISTRATION</summary>
-        <div className="advanced-body">
-          <p className="muted">
-            Advertised capabilities allow routing to whichever trusted node has the required capability.
-          </p>
-          <div className="capability-grid">
-            {CAPABILITY_CHOICES.map((cap) => (
-              <label className="check" key={cap}>
-                <input
-                  type="checkbox"
-                  checked={props.me.capabilities.includes(cap)}
-                  onChange={() => void toggleCapability(cap)}
-                />
-                {cap}
-              </label>
-            ))}
-          </div>
-
-          {isOwner && devices.filter((d) => d.id !== props.me.deviceId).length > 0 && (
-            <div className="admin-nodes">
-              {devices
-                .filter((d) => d.id !== props.me.deviceId)
-                .map((device) => (
-                  <div className="admin-node" key={device.id}>
-                    <span>{device.name}</span>
-                    <button className="ghost" onClick={() => void remove(device.id, device.name)}>
-                      REVOKE
-                    </button>
-                  </div>
-                ))}
-            </div>
-          )}
-
-          {carrying.length > 0 && (
-            <p className="muted">
-              {carrying.length} sealed payload{carrying.length === 1 ? "" : "s"} queued for{" "}
-              {[...new Set(carrying.map((b) => nameOf(b.destinationDeviceId)))].join(", ")}.
-            </p>
-          )}
-
-          {note && <p className="muted">{note}</p>}
-        </div>
-      </details>
+      {carrying.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Carrying {carrying.length} item{carrying.length === 1 ? "" : "s"} for{" "}
+          {[...new Set(carrying.map((b) => nameOf(b.destinationDeviceId)))].join(", ")} — delivered automatically once reachable.
+        </p>
+      )}
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
     </div>
   );
 }

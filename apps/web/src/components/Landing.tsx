@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Select } from "./ui/Select.js";
+import { Button } from "./ui/button.js";
+import { MeshMark } from "./mesh-icons.js";
 
 const TTL_CHOICES: Array<{ label: string; ms?: number }> = [
   { label: "Never expires" },
@@ -21,76 +22,100 @@ export function LandingView(props: {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="center">
-      <h1>ScreenMesh</h1>
-      <p className="tagline">Private device network</p>
-      <p className="landing-lede">Your devices. One encrypted mesh.</p>
-      <p className="landing-guarantees">NO ACCOUNT &nbsp;·&nbsp; NO CLOUD &nbsp;·&nbsp; NO CENTRAL SERVER</p>
-      {(props.error ?? error) && <div className="error">{props.error ?? error}</div>}
-      <div className="grid" style={{ width: "min(760px, 95vw)" }}>
-        <section className="card stack">
-          <h2>Establish channel</h2>
-          <p className="muted">
-            This node becomes the owner and can admit others via QR handshake or link.
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <div className="w-full max-w-2xl">
+        <div className="flex flex-col items-center text-center">
+          <MeshMark className="size-8" />
+          <h1 className="mt-4 text-2xl font-semibold">ScreenMesh</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your devices. One encrypted mesh. No account, no cloud, no central server.
           </p>
-          <input
-            className="channel-name-input"
-            type="text"
-            value={workspaceName}
-            onChange={(e) => setWorkspaceName(e.target.value)}
-          />
-          <div className="ttl-row">
-            <span>AUTO-EXPIRY</span>
-            <Select
-              ariaLabel="Channel expiration"
-              value={ttlIndex}
-              onChange={setTtlIndex}
-              options={TTL_CHOICES.map((choice, i) => ({ value: i, label: choice.label }))}
-            />
+        </div>
+
+        {(props.error ?? error) && (
+          <div className="mt-6 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {props.error ?? error}
           </div>
-          <button
-            className="btn-primary btn-large"
-            disabled={busy || !workspaceName.trim()}
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              try {
-                await props.onCreate(workspaceName.trim(), TTL_CHOICES[ttlIndex]?.ms);
-              } catch (err) {
-                setError(`Could not create workspace: ${err instanceof Error ? err.message : err}`);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            Initialize channel
-          </button>
-        </section>
-        <section className="card stack">
-          <h2>Infiltrate channel</h2>
-          <p className="muted">
-            Scan the owner's QR with your camera, or paste the access link / code below.
-          </p>
-          <textarea
-            placeholder="Paste access link or pairing code"
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value)}
-          />
-          <button
-            className="ghost btn-large"
-            disabled={!joinCode.trim()}
-            onClick={() => {
-              try {
-                setError(null);
-                props.onJoinCode(joinCode);
-              } catch {
-                setError("That doesn't look like a valid pairing code.");
-              }
-            }}
-          >
-            Connect
-          </button>
-        </section>
+        )}
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <section className="rounded-lg border border-border bg-card p-5 shadow-[0_1px_2px_oklch(0_0_0/.04)]">
+            <h2 className="text-sm font-semibold">Create a workspace</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This device becomes the owner and can pair others via QR or link.
+            </p>
+            <div className="mt-4 space-y-3">
+              <input
+                type="text"
+                value={workspaceName}
+                onChange={(e) => setWorkspaceName(e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">Expires</span>
+                <select
+                  aria-label="Workspace expiration"
+                  value={ttlIndex}
+                  onChange={(e) => setTtlIndex(Number(e.target.value))}
+                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                >
+                  {TTL_CHOICES.map((choice, i) => (
+                    <option key={choice.label} value={i}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                className="w-full"
+                disabled={busy || !workspaceName.trim()}
+                onClick={async () => {
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    await props.onCreate(workspaceName.trim(), TTL_CHOICES[ttlIndex]?.ms);
+                  } catch (err) {
+                    setError(`Could not create workspace: ${err instanceof Error ? err.message : err}`);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Create workspace
+              </Button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-border bg-card p-5 shadow-[0_1px_2px_oklch(0_0_0/.04)]">
+            <h2 className="text-sm font-semibold">Join a workspace</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Scan the owner's QR with your camera, or paste the join link or code below.
+            </p>
+            <div className="mt-4 space-y-3">
+              <textarea
+                placeholder="Paste join link or pairing code"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                className="min-h-20 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={!joinCode.trim()}
+                onClick={() => {
+                  try {
+                    setError(null);
+                    props.onJoinCode(joinCode);
+                  } catch {
+                    setError("That doesn't look like a valid pairing code.");
+                  }
+                }}
+              >
+                Join
+              </Button>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

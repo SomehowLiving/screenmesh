@@ -1,11 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     // Self-signed HTTPS: Web Crypto (device identities, envelope encryption)
     // requires a secure context, and localhost doesn't count on OTHER
     // devices. Phones hitting the LAN URL get a cert warning once — proceed.
@@ -17,8 +19,8 @@ export default defineConfig({
         short_name: "ScreenMesh",
         description:
           "Encrypted device-to-device relay. Move notes, links, files, and clipboard items across your machines — no accounts, no cloud, no trace left behind.",
-        theme_color: "#000000",
-        background_color: "#000000",
+        theme_color: "#fafafa",
+        background_color: "#fafafa",
         display: "standalone",
         start_url: "/",
         icons: [
