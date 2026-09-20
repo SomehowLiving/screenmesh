@@ -10,6 +10,7 @@ import {
   type LocalWorkspace,
 } from "../lib/app.js";
 import { Button } from "./ui/button.js";
+import { ConfirmDialog } from "./ui/confirm-dialog.js";
 import { DeviceTypeIcon } from "./mesh-icons.js";
 
 const CAPABILITY_CHOICES: DeviceCapability[] = [
@@ -40,11 +41,11 @@ export function DevicesPanel(props: {
   const devices = useLiveQuery(() => props.db.devices.toArray(), [props.db]) ?? [];
   const carrying = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
   const [note, setNote] = useState<string | null>(null);
+  const [deviceToRemove, setDeviceToRemove] = useState<{ id: string; name: string } | null>(null);
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
   const nameOf = (id: string) => devices.find((d) => d.id === id)?.name ?? "an offline device";
 
   async function remove(deviceId: string, name: string) {
-    if (!window.confirm(`Remove "${name}" from this workspace? It will lose access immediately.`)) return;
     try {
       setNote(null);
       await revokeDevice(props.me, props.workspace, props.engine, deviceId);
@@ -69,6 +70,7 @@ export function DevicesPanel(props: {
 
   return (
     <div className="space-y-3">
+      <ConfirmDialog open={deviceToRemove !== null} title={`Remove ${deviceToRemove?.name ?? "device"}?`} description="It will lose access to this workspace immediately. This cannot erase anything it already copied outside ScreenMesh." confirmLabel="Remove device" destructive onClose={() => setDeviceToRemove(null)} onConfirm={() => { if (!deviceToRemove) return; const target = deviceToRemove; setDeviceToRemove(null); void remove(target.id, target.name); }} />
       <p className="text-xs text-muted-foreground">{online.length} online · {devices.length} paired</p>
 
       {devices.length === 0 ? (
@@ -94,7 +96,7 @@ export function DevicesPanel(props: {
                 {device.status === "online" ? "Online" : lastSeen(device.lastSeenAt)}
               </span>
               {isOwner && device.id !== props.me.deviceId && (
-                <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-destructive" onClick={() => void remove(device.id, device.name)}>
+                <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-destructive" onClick={() => setDeviceToRemove({ id: device.id, name: device.name })}>
                   Remove
                 </Button>
               )}

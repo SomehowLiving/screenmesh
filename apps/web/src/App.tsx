@@ -26,6 +26,7 @@ import { SentPanel } from "./components/Sent.js";
 import { ActivityPanel } from "./components/Activity.js";
 import { LibraryPanel } from "./components/Library.js";
 import { Button } from "./components/ui/button.js";
+import { ConfirmDialog } from "./components/ui/confirm-dialog.js";
 import {
   ActivityIcon,
   ArrowUpIcon,
@@ -122,6 +123,7 @@ export function App() {
   const [initialPairing, setInitialPairing] = useState<PairingPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pairOpen, setPairOpen] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [feedFilter, setFeedFilter] = useState("All objects");
   const [activeView, setActiveView] = useState<WorkspaceView>(currentWorkspaceView);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
@@ -292,16 +294,14 @@ export function App() {
             variant="ghost"
             size="sm"
             className="hidden sm:inline-flex"
-            onClick={() => {
-              if (window.confirm("Leave this workspace? Local workspace data will be removed from this device.")) {
-                void resetToLanding("You left the workspace.");
-              }
-            }}
+            onClick={() => setLeaveConfirmOpen(true)}
           >
             Leave
           </Button>
         </div>
       </header>
+
+      <ConfirmDialog open={leaveConfirmOpen} title="Leave this workspace?" description="ScreenMesh will remove this workspace and its local objects from this device. Other paired devices are not affected." confirmLabel="Leave workspace" destructive onClose={() => setLeaveConfirmOpen(false)} onConfirm={() => { setLeaveConfirmOpen(false); void resetToLanding("You left the workspace."); }} />
 
       {error && (
         <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive md:px-6">
