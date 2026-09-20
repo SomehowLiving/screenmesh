@@ -50,7 +50,7 @@ const SEEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 15_000;
 
 /** Object types whose text is collaboratively editable via Yjs. */
-const EDITABLE_TYPES = new Set(["text", "code", "link"]);
+const EDITABLE_TYPES = new Set(["text", "document", "code", "link"]);
 
 /**
  * Secure file drop: files whose base64 payload exceeds this many
@@ -344,8 +344,9 @@ export class MeshEngine {
     const doc = await this.docFor(objectId);
     doc.transact(() => applyTextDiff(doc.getText("text"), newText));
     await this.persistDoc(objectId, doc);
+    const title = (object.content as TextContent | null)?.title;
     await this.cfg.db.objects.update(objectId, {
-      content: { text: doc.getText("text").toString() },
+      content: { text: doc.getText("text").toString(), ...(title ? { title } : {}) },
       updatedAt: this.now(),
     });
     await this.broadcastOps([
@@ -476,6 +477,7 @@ export class MeshEngine {
   private async purgeObject(objectId: string): Promise<void> {
     await this.cfg.db.objects.delete(objectId);
     await this.cfg.db.ydocs.delete(objectId);
+    await this.cfg.db.objectStates.delete(objectId);
     this.ydocs.get(objectId)?.destroy();
     this.ydocs.delete(objectId);
   }
@@ -917,8 +919,9 @@ export class MeshEngine {
           const merged = doc.getText("text").toString();
           const current = (object.content as TextContent | null)?.text ?? "";
           if (merged !== current) {
+            const title = (object.content as TextContent | null)?.title;
             await this.cfg.db.objects.update(objectId, {
-              content: { text: merged },
+              content: { text: merged, ...(title ? { title } : {}) },
               updatedAt: now,
             });
           }

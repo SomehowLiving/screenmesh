@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   toBase64,
@@ -46,6 +46,7 @@ const EXPIRY_CHOICES: Array<{ label: string; ms?: number }> = [
 const TYPE_CHOICES: Array<{ value: MeshObjectType | "auto"; label: string }> = [
   { value: "auto", label: "Auto-detect type" },
   { value: "text", label: "Text" },
+  { value: "document", label: "Document" },
   { value: "link", label: "Link" },
   { value: "code", label: "Code snippet" },
   { value: "command", label: "Command (for a desktop agent)" },
@@ -135,6 +136,7 @@ export function SendPanel(props: {
   const [type, setType] = useState<MeshObjectType | "auto">("auto");
   const [file, setFile] = useState<FileContent | null>(null);
   const [attachmentName, setAttachmentName] = useState("");
+  const [documentTitle, setDocumentTitle] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expiryIndex, setExpiryIndex] = useState(0);
   const [deleteAfterOpening, setDeleteAfterOpening] = useState(false);
@@ -157,6 +159,16 @@ export function SendPanel(props: {
   // Composer target select mirrors the mesh mock's single-target dropdown,
   // but "Everyone" maps onto our real multi-recipient selection model.
   const targetValue = allSelected ? "__everyone__" : (recipients[0]?.id ?? "");
+  const suggested = useMemo(() => {
+    const effectiveType = type === "auto" ? detectType(text) : type;
+    const needed = effectiveType === "code" || effectiveType === "command" || effectiveType === "agent_task"
+      ? "terminal"
+      : effectiveType === "link" ? "browser" : undefined;
+    const capabilityMatches = needed ? others.filter((device) => device.capabilities?.includes(needed)) : [];
+    const viewingMatches = effectiveType === "image" ? others.filter((device) => device.type === "display" || device.type === "tablet") : [];
+    const candidate = [...capabilityMatches.filter((device) => device.status === "online"), ...capabilityMatches, ...viewingMatches.filter((device) => device.status === "online"), ...viewingMatches][0];
+    return candidate ? { device: candidate, reason: needed ? `${needed} available` : "suited to viewing" } : null;
+  }, [others, text, type]);
 
   function selectSingleTarget(deviceId: string) {
     if (deviceId === "__everyone__") {
@@ -198,6 +210,26 @@ export function SendPanel(props: {
     setNote(null);
   }
 
+  /** Universal capture starts in the normal composer: users can review the
+   * detected type, destination, lifecycle, and approval options before any
+   * data leaves this device. */
+  async function captureClipboard() {
+    try {
+      const captured = await navigator.clipboard.readText();
+      if (!captured.trim()) {
+        setNote("Clipboard is empty.");
+        return;
+      }
+      setText(captured);
+      setType("auto");
+      setFile(null);
+      setAttachmentName("");
+      setNote("Captured from clipboard. Choose where it should go when you are ready.");
+    } catch (err) {
+      setNote(`Couldn't read the clipboard: ${err instanceof Error ? err.message : "permission was not granted"}.`);
+    }
+  }
+
   function currentOptions(): SendOptions {
     const ms = EXPIRY_CHOICES[expiryIndex]?.ms;
     return {
@@ -228,6 +260,10 @@ export function SendPanel(props: {
       setNote(
         `Clipboard shared with ${recipients.map((d) => d.name).join(", ")} — erases itself after ${CLIPBOARD_DURATIONS[clipboardDuration]?.label ?? "a few minutes"} or first paste.`,
       );
+      const offline = recipients.filter((device) => device.status === "offline");
+      if (offline.length) {
+        setNote(`Queued safely for ${offline.map((device) => device.name).join(", ")}. It will deliver automatically when a trusted route opens.`);
+      }
     } catch (err) {
       setNote(
         `Couldn't read the clipboard: ${err instanceof Error ? err.message : err}. Your browser may need permission — try again after granting clipboard access.`,
@@ -275,6 +311,7 @@ export function SendPanel(props: {
     try {
       const recipientIds = recipients.map((d) => d.id);
       const options = currentOptions();
+      const offline = recipients.filter((device) => device.status === "offline");
       if (file) {
         await props.engine.sendObject(
           { type: file.mimeType.startsWith("image/") ? "image" : "file", content: { ...file, name: attachmentName.trim() || file.name } },
@@ -294,11 +331,21 @@ export function SendPanel(props: {
             .map((line) => ({ id: crypto.randomUUID(), text: line, done: false }));
           await props.engine.sendObject({ type: "checklist", content: { items } }, recipientIds, options);
         } else {
-          await props.engine.sendObject({ type: objectType, content: { text: content } }, recipientIds, options);
+          await props.engine.sendObject(
+            { type: objectType, content: objectType === "document" ? { text: content, title: documentTitle.trim() || undefined } : { text: content } },
+            recipientIds,
+            options,
+          );
         }
         setText("");
+        setDocumentTitle("");
+        if (offline.length) {
+          setNote(`Queued safely for ${offline.map((device) => device.name).join(", ")}. It will deliver automatically when a trusted route opens.`);
+        }
       }
-      setNote(`Sent to ${recipients.map((d) => d.name).join(", ")} — offline devices get it when they reconnect.`);
+      if (offline.length === 0) {
+        setNote(`Sent securely to ${recipients.map((device) => device.name).join(", ")}.`);
+      }
     } catch (err) {
       setNote(`Send failed: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -331,6 +378,8 @@ export function SendPanel(props: {
           </p>
         </div>
       ) : (
+        <>
+        {type === "document" && <input value={documentTitle} onChange={(event) => setDocumentTitle(event.target.value)} placeholder="Document title (optional)" className="mb-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring" />}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -346,6 +395,7 @@ export function SendPanel(props: {
           }
           className="min-h-28 w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-muted-foreground md:min-h-32"
         />
+        </>
       )}
 
       {file && (
@@ -376,6 +426,9 @@ export function SendPanel(props: {
           />
           <PlusIcon />
         </label>
+        <Button variant="ghost" size="sm" className="hidden text-muted-foreground sm:inline-flex" onClick={() => void captureClipboard()}>
+          Capture
+        </Button>
         <span className="hidden text-[10px] text-muted-foreground md:inline">⌘ Enter to send</span>
         <Button
           variant="ghost"
@@ -404,6 +457,12 @@ export function SendPanel(props: {
           Send <ArrowUpIcon />
         </Button>
       </div>
+
+      {suggested && recipients.length === 0 && (
+        <button type="button" onClick={() => selectSingleTarget(suggested.device.id)} className="mt-2 flex items-center gap-2 rounded-md px-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground">
+          <span className="size-1.5 rounded-full bg-success" /> Suggested: <span className="font-medium text-foreground">{suggested.device.name}</span> · {suggested.reason}
+        </button>
+      )}
 
       {showMore && (
         <div className="mt-2 space-y-3 border-t border-border px-1 pt-3">

@@ -61,6 +61,8 @@ export interface Workspace {
 
 export type MeshObjectType =
   | "text"
+  /** Long-form collaboratively editable text, with an optional title. */
+  | "document"
   | "link"
   | "code"
   | "image"
@@ -123,6 +125,8 @@ export interface MeshEvent {
 /** Content shape for "text" | "link" | "code" objects. */
 export interface TextContent {
   text: string;
+  /** Used by document objects; harmlessly optional for short text objects. */
+  title?: string;
 }
 
 /** Content shape for "image" | "file" objects (small payloads, base64). */

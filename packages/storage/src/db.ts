@@ -27,6 +27,16 @@ export interface YDocState {
   state: Uint8Array;
 }
 
+/** Personal organization metadata. It is intentionally local: pinning or
+ * tagging an object should not alter anybody else's workspace. */
+export interface ObjectLocalState {
+  objectId: string;
+  pinned?: boolean;
+  tags?: string[];
+  lastOpenedAt?: number;
+  continueLater?: boolean;
+}
+
 /**
  * Persisted Double Ratchet session state, one row per peer device (this
  * device's workspace is implicit — one ScreenMeshDb per workspace
@@ -60,6 +70,7 @@ export class ScreenMeshDb extends Dexie {
   settings!: Table<SettingEntry, string>;
   seen!: Table<SeenMessage, string>;
   ydocs!: Table<YDocState, string>;
+  objectStates!: Table<ObjectLocalState, string>;
   ratchets!: Table<PersistedRatchetSession, string>;
 
   constructor(name = "screenmesh") {
@@ -85,6 +96,9 @@ export class ScreenMeshDb extends Dexie {
     });
     this.version(5).stores({
       events: "id, timestamp, category, type, deviceId, objectId",
+    });
+    this.version(6).stores({
+      objectStates: "objectId, pinned, lastOpenedAt, continueLater",
     });
   }
 }

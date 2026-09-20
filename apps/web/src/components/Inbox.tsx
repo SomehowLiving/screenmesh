@@ -16,7 +16,7 @@ import { Button } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { ActivityIcon, CommandIcon, LinkIcon } from "./mesh-icons.js";
 
-const EDITABLE_TYPES = new Set(["text", "code", "link"]);
+const EDITABLE_TYPES = new Set(["text", "document", "code", "link"]);
 
 function isFileObject(object: MeshObject): boolean {
   return object.type === "image" || object.type === "file";
