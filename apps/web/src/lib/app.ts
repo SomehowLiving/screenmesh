@@ -54,11 +54,20 @@ export interface Session {
 }
 
 /**
- * The relay is proxied same-origin under /api (see vite.config.ts), so
- * every device simply talks to whatever host it loaded the page from.
+ * In dev, the relay is proxied same-origin under /api (see vite.config.ts),
+ * so every device simply talks to whatever host it loaded the page from.
+ *
+ * In production this is deliberately NOT relied on: Vercel's rewrites
+ * reliably proxy plain HTTP but do not guarantee proxying a live
+ * WebSocket upgrade to an external destination, and the relay connection
+ * IS a WebSocket. VITE_RELAY_ORIGIN (set in the Vercel project's env
+ * vars to the Railway relay's own https:// origin) makes the deployed
+ * PWA talk to the relay directly — same-origin rewriting is only used
+ * when that var is unset, i.e. local dev.
  */
 export function serverBaseUrl(): string {
-  return `${location.origin}/api`;
+  const override = import.meta.env.VITE_RELAY_ORIGIN as string | undefined;
+  return `${override ?? location.origin}/api`;
 }
 
 function relayWsUrl(serverUrl: string): string {
@@ -90,11 +99,17 @@ export async function listLanCandidates(): Promise<LanCandidate[]> {
 }
 
 /**
- * An origin OTHER devices on the network can reach. When the page is open
- * on localhost, join links/QRs would be useless to a phone — ask the
- * server for this machine's best-guess LAN address and use that instead.
+ * An origin OTHER devices can reach. When the page is open on localhost,
+ * join links/QRs would be useless to a phone — ask the server for this
+ * machine's best-guess LAN address and use that instead.
+ *
+ * When VITE_RELAY_ORIGIN is set (production), it wins outright: other
+ * devices should be told to reach the relay directly, not via whatever
+ * domain served the page — see serverBaseUrl()'s doc comment for why.
  */
 export async function shareableOrigin(): Promise<string> {
+  const override = import.meta.env.VITE_RELAY_ORIGIN as string | undefined;
+  if (override) return override;
   const { hostname } = location;
   if (hostname !== "localhost" && hostname !== "127.0.0.1") return location.origin;
   try {
