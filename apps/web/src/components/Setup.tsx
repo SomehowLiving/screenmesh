@@ -1,6 +1,15 @@
 import { useState } from "react";
 import type { DeviceType } from "@screenmesh/protocol";
 import { defaultDeviceType } from "../lib/app.js";
+import { Select } from "./ui/Select.js";
+
+const DEVICE_TYPE_OPTIONS: Array<{ value: DeviceType; label: string }> = [
+  { value: "laptop", label: "Laptop" },
+  { value: "phone", label: "Phone" },
+  { value: "tablet", label: "Tablet" },
+  { value: "desktop", label: "Desktop" },
+  { value: "display", label: "Display" },
+];
 
 export function SetupView(props: {
   joining: boolean;
@@ -12,11 +21,11 @@ export function SetupView(props: {
   return (
     <div className="center">
       <h1>ScreenMesh</h1>
-      <p className="tagline">[ classified access :: node registration ]</p>
+      <p className="tagline">[ node registration ]</p>
       <p className="muted">
         {props.joining
           ? "Identify this node to join the channel."
-          : "Identify this node to proceed. Its keypair is generated locally and never leaves this device — no server, ever, holds it."}
+          : "Identify this node to proceed."}
       </p>
       <form
         className="stack"
@@ -33,14 +42,13 @@ export function SetupView(props: {
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
-        <select value={type} onChange={(e) => setType(e.target.value as DeviceType)}>
-          <option value="laptop">Laptop</option>
-          <option value="phone">Phone</option>
-          <option value="tablet">Tablet</option>
-          <option value="desktop">Desktop</option>
-          <option value="display">Display</option>
-        </select>
-        <button type="submit" disabled={!name.trim()}>
+        <Select ariaLabel="Device type" value={type} onChange={setType} options={DEVICE_TYPE_OPTIONS} />
+        <div className="security-status">
+          <span className="status-led" /> LOCAL KEYPAIR GENERATED
+          <br />
+          <span className="security-substatus">PRIVATE KEY NEVER LEAVES THIS NODE</span>
+        </div>
+        <button className="btn-primary" type="submit" disabled={!name.trim()}>
           Generate identity
         </button>
       </form>

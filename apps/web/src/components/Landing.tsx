@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Select } from "./ui/Select.js";
 
 const TTL_CHOICES: Array<{ label: string; ms?: number }> = [
   { label: "Never expires" },
@@ -22,7 +23,9 @@ export function LandingView(props: {
   return (
     <div className="center">
       <h1>ScreenMesh</h1>
-      <p className="tagline">[ encrypted device-to-device relay — no accounts, no cloud ]</p>
+      <p className="tagline">Private device network</p>
+      <p className="landing-lede">Your devices. One encrypted mesh.</p>
+      <p className="landing-guarantees">NO ACCOUNT &nbsp;·&nbsp; NO CLOUD &nbsp;·&nbsp; NO CENTRAL SERVER</p>
       {(props.error ?? error) && <div className="error">{props.error ?? error}</div>}
       <div className="grid" style={{ width: "min(760px, 95vw)" }}>
         <section className="card stack">
@@ -35,14 +38,14 @@ export function LandingView(props: {
             value={workspaceName}
             onChange={(e) => setWorkspaceName(e.target.value)}
           />
-          <select value={ttlIndex} onChange={(e) => setTtlIndex(Number(e.target.value))}>
-            {TTL_CHOICES.map((choice, i) => (
-              <option key={choice.label} value={i}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
+          <Select
+            ariaLabel="Channel expiration"
+            value={ttlIndex}
+            onChange={setTtlIndex}
+            options={TTL_CHOICES.map((choice, i) => ({ value: i, label: choice.label }))}
+          />
           <button
+            className="btn-primary"
             disabled={busy || !workspaceName.trim()}
             onClick={async () => {
               setBusy(true);

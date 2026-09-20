@@ -9,6 +9,33 @@ import {
   type LocalIdentity,
   type LocalWorkspace,
 } from "../lib/app.js";
+import { Select } from "./ui/Select.js";
+
+/**
+ * Presentation-only masking of the join link: the real, fully-functional
+ * URL is still what COPY ACCESS LINK puts on the clipboard and what the
+ * QR encodes — this only changes what's rendered inline, so a raw
+ * "http://192.168.1.5:5173/#join=..." dev-server URL never has to be
+ * shown to someone pairing a device.
+ */
+function maskedAccessLink(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const tokenLength = (parsed.hash || parsed.pathname).replace(/[^A-Za-z0-9]/g, "").length;
+    const dots = "•".repeat(Math.min(24, Math.max(12, tokenLength / 3)));
+    return `mesh://${dots}`;
+  } catch {
+    return "mesh://••••••••••••••••";
+  }
+}
+
+function formatCountdown(msRemaining: number): string {
+  if (msRemaining <= 0) return "00:00";
+  const totalSeconds = Math.ceil(msRemaining / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
 
 export function PairPanel(props: {
   me: LocalIdentity;
@@ -22,6 +49,7 @@ export function PairPanel(props: {
   const [selectedOrigin, setSelectedOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const joinUrl = pairing ? makeJoinUrl(pairing) : null;
 
@@ -66,6 +94,15 @@ export function PairPanel(props: {
     }
   }, [joinUrl]);
 
+  // Live self-destruct countdown — ticks off the real pairing.expiresAt,
+  // not a hardcoded "05:00" that would drift from the truth once a
+  // minute has actually passed.
+  useEffect(() => {
+    if (!pairing) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [pairing]);
+
   if (!isOwner) {
     return (
       <div className="pair-content">
@@ -92,7 +129,7 @@ export function PairPanel(props: {
         </div>
 
         <div className="pair-details">
-          <div className="pair-title">CONNECT A NEW SCREEN</div>
+          <div className="pair-title">SCAN TO INFILTRATE</div>
           <p className="muted">
             Scan this QR code with the device you want to pair. The code is single-use and
             self-destructs after its TTL.
@@ -100,7 +137,9 @@ export function PairPanel(props: {
 
           {joinUrl && (
             <div className="join-link">
-              <span>{joinUrl}</span>
+              <span title="The real link is copied — this display is masked for presentation.">
+                {maskedAccessLink(joinUrl)}
+              </span>
               <button
                 className="copy-btn"
                 onClick={async () => {
@@ -108,43 +147,33 @@ export function PairPanel(props: {
                   setCopied(true);
                 }}
               >
-                {copied ? "COPIED" : "COPY"}
+                {copied ? "COPIED" : "COPY ACCESS LINK"}
               </button>
             </div>
           )}
 
           <div className="pair-meta">
             <span>● SINGLE USE</span>
-            <span>⌑ E2EE</span>
-            <span>TTL 05:00</span>
+            <span>⌑ ENCRYPTED</span>
+            {pairing && <span>SELF-DESTRUCTS {formatCountdown(pairing.expiresAt - now)}</span>}
           </div>
 
           {candidates.length > 1 && (
             <div className="network-select">
-              <label>NETWORK ORIGIN</label>
-              <select
+              <label>ROUTE NETWORK</label>
+              <Select
+                ariaLabel="Network interface"
                 value={selectedOrigin}
-                onChange={(e) => setSelectedOrigin(e.target.value)}
-              >
-                {candidates.map((c) => (
-                  <option key={c.origin} value={c.origin}>
-                    {c.name} — {c.address}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedOrigin}
+                options={candidates.map((c) => ({ value: c.origin, label: `${c.name} — ${c.address}` }))}
+              />
               <button className="ghost" onClick={() => void regenerate(selectedOrigin)}>
                 USE THIS NETWORK
               </button>
             </div>
           )}
 
-          {pairing && (
-            <div className="expiry-line">
-              EXPIRES AT {new Date(pairing.expiresAt).toLocaleTimeString()}
-            </div>
-          )}
-
-          <button className="rotate-btn" onClick={() => void regenerate()}>
+          <button className="rotate-btn ghost" onClick={() => void regenerate()}>
             ↻ ROTATE KEY
           </button>
         </div>

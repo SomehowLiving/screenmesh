@@ -21,6 +21,16 @@ import { DevicesPanel } from "./components/Devices.js";
 import { SendPanel } from "./components/Send.js";
 import { InboxPanel } from "./components/Inbox.js";
 import { SentPanel } from "./components/Sent.js";
+import {
+  DeviceIcon,
+  InboxIcon,
+  KeyIcon,
+  MeshIcon,
+  PairIcon,
+  RouteIcon,
+  SendIcon,
+  SettingsIcon,
+} from "./components/ui/Icons.js";
 
 const STATUS_LABEL: Record<TransportStatus, string> = {
   idle: "IDLE",
@@ -195,28 +205,28 @@ export function App() {
 
         <nav className="nav">
           <button className="nav-item active" onClick={() => scrollTo("mesh")}>
-            <span className="nav-icon">◈</span> Mesh
+            <MeshIcon /> Mesh
           </button>
           <button className="nav-item" onClick={() => scrollTo("mesh")}>
-            <span className="nav-icon">□</span> Devices
+            <DeviceIcon /> Devices
           </button>
           <button className="nav-item" onClick={() => scrollTo("activity")}>
-            <span className="nav-icon">◇</span> Inbox
+            <InboxIcon /> Inbox
           </button>
           <button className="nav-item" onClick={() => scrollTo("send")}>
-            <span className="nav-icon">↗</span> Send
+            <SendIcon /> Send
           </button>
           <button className="nav-item" onClick={() => setPairOpen(true)}>
-            <span className="nav-icon">⌘</span> Pair Device
+            <PairIcon /> Pair Device
           </button>
           <button className="nav-item" onClick={() => scrollTo("log")}>
-            <span className="nav-icon">⌁</span> Routes
+            <RouteIcon /> Routes
           </button>
           <button className="nav-item" onClick={() => scrollTo("mesh")}>
-            <span className="nav-icon">◇</span> Keys
+            <KeyIcon /> Keys
           </button>
           <button className="nav-item" onClick={() => scrollTo("log")}>
-            <span className="nav-icon">⚙</span> Settings
+            <SettingsIcon /> Settings
           </button>
         </nav>
 

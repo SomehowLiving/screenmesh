@@ -1252,6 +1252,36 @@ h1::before { content: "// "; color: var(--muted); text-shadow: none; }
   margin-top: -0.4rem;
 }
 
+.landing-lede {
+  color: var(--text);
+  font-size: 1rem;
+  margin: 0.4rem 0 0;
+}
+
+.landing-guarantees {
+  color: var(--accent);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin: 0.1rem 0 0.6rem;
+}
+
+.security-status {
+  border: 1px solid var(--border);
+  background: rgba(10, 25, 21, 0.45);
+  padding: 8px 10px;
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.7;
+}
+
+.security-substatus {
+  color: var(--muted);
+  font-size: 9px;
+  margin-left: 15px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -1376,4 +1406,182 @@ label.check { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; 
   opacity: 0.05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   mix-blend-mode: overlay;
+}
+
+/* =======================================================================
+ * Design-system primitives: custom select, custom checkbox, button
+ * hierarchy, nav icon states. Native <select>/<input type=checkbox>
+ * cannot be fully skinned (the open option list and check glyph are
+ * OS-rendered on most platforms — Windows' native blue highlight was
+ * the specific complaint), so these replace the visible surface
+ * entirely rather than patch it per-screen.
+ * ===================================================================== */
+
+.sm-select {
+  position: relative;
+  width: 100%;
+}
+
+.sm-select-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #030807;
+  color: var(--text);
+  border: 1px solid var(--border-bright);
+  border-radius: 0;
+  padding: 8px 9px;
+  font: inherit;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+.sm-select-trigger:hover:not(:disabled) {
+  background: #030807;
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+.sm-select.open .sm-select-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(56, 246, 196, 0.14);
+}
+
+.sm-select-trigger:disabled { opacity: 0.4; }
+
+.sm-select-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+
+.sm-select.open .sm-select-chevron { transform: rotate(180deg); color: var(--accent); }
+
+.sm-select-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: #04100d;
+  border: 1px solid var(--accent-dim);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(56, 246, 196, 0.06);
+}
+
+.sm-select-option {
+  padding: 7px 9px;
+  font-size: 12px;
+  color: #9cb8af;
+  cursor: pointer;
+}
+
+.sm-select-option:hover {
+  background: rgba(56, 246, 196, 0.08);
+  color: var(--text);
+}
+
+.sm-select-option.selected {
+  color: var(--accent);
+  background: rgba(56, 246, 196, 0.06);
+}
+
+/* Custom checkbox — appearance:none + a drawn check, no OS glyph. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 1px solid var(--border-bright);
+  background: #030807;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  margin: 0;
+}
+
+input[type="checkbox"]:hover { border-color: var(--accent-dim); }
+
+input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: rgba(56, 246, 196, 0.08);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 1.6px solid var(--accent);
+  border-bottom: 1.6px solid var(--accent);
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+input[type="checkbox"]:focus-visible,
+.sm-select-trigger:focus-visible,
+button:focus-visible,
+input[type="text"]:focus-visible,
+textarea:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Custom scrollbars, everywhere — a default OS scrollbar is the same
+ * kind of "browser default" break as the select/checkbox issues above. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: #030706; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+
+/* Button hierarchy: primary (default) / secondary (.ghost, existing) /
+ * tertiary (.btn-tertiary, new) — three distinct weights instead of
+ * every non-primary action looking the same. */
+.btn-primary {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(56, 246, 196, 0.12), 0 0 18px rgba(56, 246, 196, 0.08);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 26px rgba(56, 246, 196, 0.22);
+}
+
+.btn-tertiary {
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.btn-tertiary:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Sidebar nav icons: muted by default, electric green + subtle glow when active. */
+.nav-item svg { opacity: 0.75; transition: opacity 0.12s ease; }
+.nav-item:hover svg,
+.nav-item.active svg { opacity: 1; }
+.nav-item.active svg { filter: drop-shadow(0 0 4px rgba(56, 246, 196, 0.5)); }
+
+/* Local-network origin presented as a plain-language label, not a raw
+ * dev URL — the functional URL is still what's actually copied/embedded
+ * in the join link; this only changes what's displayed inline. */
+.origin-chip {
+  color: var(--accent);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--border-bright);
+  padding: 2px 6px;
+  text-transform: uppercase;
 }

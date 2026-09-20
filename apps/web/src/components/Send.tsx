@@ -10,6 +10,7 @@ import {
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
+import { Select } from "./ui/Select.js";
 
 const CAPABILITY_CHOICES: DeviceCapability[] = [
   "terminal",
@@ -278,15 +279,20 @@ export function SendPanel(props: {
           onChange={(e) => setText(e.target.value)}
         />
       )}
-      <select value={type} onChange={(e) => setType(e.target.value as MeshObjectType | "auto")}>
-        <option value="auto">Auto-detect type</option>
-        <option value="text">Text</option>
-        <option value="link">Link</option>
-        <option value="code">Code snippet</option>
-        <option value="command">Command (for a desktop agent)</option>
-        <option value="checklist">Checklist (one item per line)</option>
-        <option value="agent_task">Agent task (structured, for a desktop agent)</option>
-      </select>
+      <Select
+        ariaLabel="Payload type"
+        value={type}
+        onChange={setType}
+        options={[
+          { value: "auto", label: "Auto-detect type" },
+          { value: "text", label: "Text" },
+          { value: "link", label: "Link" },
+          { value: "code", label: "Code snippet" },
+          { value: "command", label: "Command (for a desktop agent)" },
+          { value: "checklist", label: "Checklist (one item per line)" },
+          { value: "agent_task", label: "Agent task (structured, for a desktop agent)" },
+        ]}
+      />
       {file ? (
         <div className="row" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <span className="badge">{file.mimeType.startsWith("image/") ? "image" : "file"}</span>
@@ -319,32 +325,24 @@ export function SendPanel(props: {
         >
           Clipboard drop
         </button>
-        <select
+        <Select
+          ariaLabel="Clipboard drop duration"
           value={clipboardDuration}
-          onChange={(e) => setClipboardDuration(Number(e.target.value))}
-        >
-          {CLIPBOARD_DURATIONS.map((choice, i) => (
-            <option key={choice.label} value={i}>
-              for {choice.label}
-            </option>
-          ))}
-        </select>
+          onChange={setClipboardDuration}
+          options={CLIPBOARD_DURATIONS.map((choice, i) => ({ value: i, label: `for ${choice.label}` }))}
+        />
       </div>
       {others.length === 0 ? (
         <p className="muted">Pair another device to send things to it.</p>
       ) : (
         <div className="stack">
           <div className="actions">
-            <select
+            <Select
+              ariaLabel="Capability to route to"
               value={capability}
-              onChange={(e) => setCapability(e.target.value as DeviceCapability)}
-            >
-              {CAPABILITY_CHOICES.map((cap) => (
-                <option key={cap} value={cap}>
-                  {cap}
-                </option>
-              ))}
-            </select>
+              onChange={setCapability}
+              options={CAPABILITY_CHOICES.map((cap) => ({ value: cap, label: cap }))}
+            />
             <button className="ghost" onClick={() => void routeToCapability()}>
               Route to node with this capability
             </button>
@@ -369,13 +367,12 @@ export function SendPanel(props: {
           ))}
         </div>
       )}
-      <select value={expiryIndex} onChange={(e) => setExpiryIndex(Number(e.target.value))}>
-        {EXPIRY_CHOICES.map((choice, i) => (
-          <option key={choice.label} value={i}>
-            {choice.label}
-          </option>
-        ))}
-      </select>
+      <Select
+        ariaLabel="Expiration"
+        value={expiryIndex}
+        onChange={setExpiryIndex}
+        options={EXPIRY_CHOICES.map((choice, i) => ({ value: i, label: choice.label }))}
+      />
       <label className="check">
         <input
           type="checkbox"
@@ -393,6 +390,7 @@ export function SendPanel(props: {
         Require confirmation before delivery counts as accepted
       </label>
       <button
+        className="btn-primary"
         disabled={
           busy ||
           recipients.length === 0 ||
@@ -400,7 +398,7 @@ export function SendPanel(props: {
         }
         onClick={() => void send()}
       >
-        Transmit
+        Encrypt &amp; Transmit
       </button>
       {note && <p className="muted">{note}</p>}
     </section>
