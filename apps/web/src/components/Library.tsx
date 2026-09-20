@@ -33,18 +33,18 @@ const VIEW_FILTERS = [
   { value: "continue", label: "Continue later" },
 ];
 
-const TYPE_FILTERS: Array<{ value: string; label: string; types?: MeshObjectType[] }> = [
+const TYPE_FILTERS = [
   { value: "all", label: "All types" },
-  { value: "documents", label: "Documents", types: ["document"] },
+  { value: "documents", label: "Documents" },
   // These are user-facing content families, not a mirror of protocol enums.
-  { value: "notes", label: "Notes", types: ["text", "clipboard"] },
-  { value: "links", label: "Links", types: ["link"] },
-  { value: "code", label: "Code", types: ["code"] },
-  { value: "media", label: "Media", types: ["image"] },
-  { value: "files", label: "Files", types: ["file"] },
-  { value: "checklists", label: "Checklists", types: ["checklist"] },
-  { value: "commands", label: "Commands", types: ["command"] },
-  { value: "tasks", label: "Agent tasks", types: ["agent_task"] },
+  { value: "notes", label: "Notes" },
+  { value: "links", label: "Links" },
+  { value: "code", label: "Code" },
+  { value: "media", label: "Media" },
+  { value: "files", label: "Other files" },
+  { value: "checklists", label: "Checklists" },
+  { value: "commands", label: "Commands" },
+  { value: "tasks", label: "Agent tasks" },
 ];
 
 const EDITABLE_TYPES = new Set<MeshObjectType>(["text", "document", "code", "link"]);
@@ -79,6 +79,38 @@ function previewFor(object: MeshObject): string {
   }
   const file = object.content as FileContent;
   return file?.mimeType || "File";
+}
+
+type ContentFamily = "documents" | "notes" | "links" | "code" | "media" | "files" | "checklists" | "commands" | "tasks";
+
+function fileDescriptor(file: FileContent): { family: "documents" | "code" | "media" | "files"; label: string } {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const codeLabels: Record<string, string> = { ts: "TypeScript", tsx: "TSX", js: "JavaScript", jsx: "JSX", py: "Python", rs: "Rust", java: "Java", kt: "Kotlin", go: "Go", rb: "Ruby", php: "PHP", swift: "Swift", c: "C", cpp: "C++", h: "Header", cs: "C#", sh: "Shell script", sql: "SQL", json: "JSON", yaml: "YAML", yml: "YAML", xml: "XML", html: "HTML", css: "CSS", md: "Markdown" };
+  const documentLabels: Record<string, string> = { pdf: "PDF", doc: "Word document", docx: "Word document", odt: "OpenDocument", rtf: "Rich text", txt: "Text file", pages: "Pages document", ppt: "Presentation", pptx: "Presentation", odp: "Presentation", xls: "Spreadsheet", xlsx: "Spreadsheet", ods: "Spreadsheet", csv: "CSV" };
+  if (file.mimeType.startsWith("image/")) return { family: "media", label: "Image" };
+  if (codeLabels[extension]) return { family: "code", label: `${codeLabels[extension]} file` };
+  if (documentLabels[extension]) return { family: "documents", label: documentLabels[extension]! };
+  if (file.mimeType.startsWith("text/")) return { family: "documents", label: "Text file" };
+  if (file.mimeType.startsWith("audio/")) return { family: "media", label: "Audio" };
+  if (file.mimeType.startsWith("video/")) return { family: "media", label: "Video" };
+  return { family: "files", label: extension ? `${extension.toUpperCase()} file` : "File" };
+}
+
+function familyOf(object: MeshObject): ContentFamily {
+  if (object.type === "document") return "documents";
+  if (object.type === "text" || object.type === "clipboard") return "notes";
+  if (object.type === "link") return "links";
+  if (object.type === "code") return "code";
+  if (object.type === "image" || object.type === "file") return fileDescriptor(object.content as FileContent).family;
+  if (object.type === "checklist") return "checklists";
+  if (object.type === "command") return "commands";
+  return "tasks";
+}
+
+function displayType(object: MeshObject): string {
+  if (object.type === "file" || object.type === "image") return fileDescriptor(object.content as FileContent).label;
+  if (object.type === "document") return "Document";
+  return object.type.replace("_", " ");
 }
 
 function formatSize(bytes: number) {
@@ -127,13 +159,12 @@ export function LibraryPanel(props: { db: ScreenMeshDb; me: LocalIdentity; engin
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return objects.filter((object) => {
-      const contentFamily = TYPE_FILTERS.find((item) => item.value === typeFilter);
-      if (contentFamily?.types && !contentFamily.types.includes(object.type)) return false;
+      if (typeFilter !== "all" && familyOf(object) !== typeFilter) return false;
       const local = stateByObject.get(object.id);
       if (view === "pinned" && !local?.pinned) return false;
       if (view === "continue" && !local?.continueLater) return false;
       if (view === "recent" && !local?.lastOpenedAt) return false;
-      return !needle || `${nameFor(object)} ${previewFor(object)} ${(local?.tags ?? []).join(" ")}`.toLowerCase().includes(needle);
+      return !needle || `${nameFor(object)} ${previewFor(object)} ${displayType(object)} ${(local?.tags ?? []).join(" ")}`.toLowerCase().includes(needle);
     });
   }, [objects, query, stateByObject, typeFilter, view]);
   const selected = objects.find((object) => object.id === selectedId) ?? null;
@@ -171,7 +202,7 @@ export function LibraryPanel(props: { db: ScreenMeshDb; me: LocalIdentity; engin
             const done = checklist?.items.filter((item) => item.done).length ?? 0;
             const local = stateByObject.get(object.id);
             return <button key={object.id} type="button" onClick={() => { void props.db.objectStates.put({ ...local, objectId: object.id, lastOpenedAt: Date.now() }); setSelectedId(object.id); }} className="group min-h-40 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-foreground/25 hover:shadow-md focus:outline-none focus:ring-1 focus:ring-ring">
-              {image ? <img src={`data:${image.mimeType};base64,${image.dataB64}`} alt="" className="mb-3 h-24 w-full rounded-lg border border-border object-cover" /> : <div className="mb-3 flex items-center justify-between"><span className="grid size-8 place-items-center rounded-md border border-border bg-background text-muted-foreground [&_svg]:size-4">{typeIcon(object.type)}</span><span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{object.type.replace("_", " ")}</span></div>}
+              {image ? <img src={`data:${image.mimeType};base64,${image.dataB64}`} alt="" className="mb-3 h-24 w-full rounded-lg border border-border object-cover" /> : <div className="mb-3 flex items-center justify-between"><span className="grid size-8 place-items-center rounded-md border border-border bg-background text-muted-foreground [&_svg]:size-4">{typeIcon(object.type)}</span><span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{displayType(object)}</span></div>}
               <p className="truncate text-sm font-medium">{nameFor(object)}</p>
               <p className={`mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground ${object.type === "code" || object.type === "command" ? "font-mono" : ""}`}>{previewFor(object)}</p>
               <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground"><span>{nameOf(object.createdBy)} · {timeAgo(object.updatedAt)}</span>{checklist && <span>{done}/{checklist.items.length} done</span>}{(object.type === "file" || object.type === "image") && <span>{formatSize((object.content as FileContent).size)}</span>}</div>
