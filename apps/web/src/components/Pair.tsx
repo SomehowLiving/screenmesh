@@ -19,17 +19,23 @@ export function PairPanel(props: {
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
   const [pairing, setPairing] = useState<PairingPayload | null>(props.initialPairing);
   const [candidates, setCandidates] = useState<LanCandidate[]>([]);
-  const [selectedOrigin, setSelectedOrigin] = useState<string>("");
+  const [selectedOrigin, setSelectedOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
   const joinUrl = pairing ? makeJoinUrl(pairing) : null;
 
   async function regenerate(originOverride?: string) {
     try {
       setError(null);
-      setPairing(await rotatePairing(props.me, props.workspace, props.workspaceKey, originOverride));
+      setPairing(
+        await rotatePairing(
+          props.me,
+          props.workspace,
+          props.workspaceKey,
+          originOverride,
+        ),
+      );
       setCopied(false);
     } catch (err) {
       setError(`Could not create pairing code: ${err instanceof Error ? err.message : err}`);
@@ -38,24 +44,22 @@ export function PairPanel(props: {
 
   useEffect(() => {
     if (!isOwner) return;
+
     void listLanCandidates()
       .then((found) => {
         setCandidates(found);
         if (found[0]) setSelectedOrigin(found[0].origin);
       })
-      .catch(() => {
-        /* /info unreachable (e.g. non-localhost origin) — auto-detect handles it */
-      });
+      .catch(() => {});
+
     if (!pairing) void regenerate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (canvasRef.current && joinUrl) {
-      // Low error correction + the compact pairing code keep the module
-      // count small; 300px with a quiet zone scans easily from a screen.
       void QRCode.toCanvas(canvasRef.current, joinUrl, {
-        width: 300,
+        width: 260,
         margin: 2,
         errorCorrectionLevel: "L",
       });
@@ -64,43 +68,60 @@ export function PairPanel(props: {
 
   if (!isOwner) {
     return (
-      <section className="card">
-        <h2>Secure link</h2>
+      <div className="pair-content">
+        <div className="pair-warning">PAIRING CONTROLLED BY CHANNEL OWNER</div>
         <p className="muted">
-          Only the channel owner ({props.workspace.ownerDeviceId === props.me.deviceId ? "you" : "another device"})
-          can mint access codes. Ask the owner node to display its QR.
+          Only the channel owner can mint access codes. Ask the owner node to display its QR.
         </p>
-      </section>
+      </div>
     );
   }
 
   return (
-    <section className="card">
-      <h2>Secure link</h2>
-      {error && <div className="error">{error}</div>}
-      <div className="qr-wrap">
-        {joinUrl && <canvas ref={canvasRef} />}
-        <div className="stack" style={{ flex: 1, minWidth: 220 }}>
+    <div className="pair-content">
+      {error && <div className="error-banner">{error}</div>}
+
+      <div className="pair-tabs">
+        <span className="pair-tab active">QR CODE</span>
+        <span className="pair-tab">MANUAL LINK</span>
+      </div>
+
+      <div className="pair-main">
+        <div className="qr-frame">
+          {joinUrl && <canvas ref={canvasRef} />}
+        </div>
+
+        <div className="pair-details">
+          <div className="pair-title">CONNECT A NEW SCREEN</div>
           <p className="muted">
-            Scan with the other node's camera, or copy the access link. Codes are{" "}
-            <strong>single-use</strong> and self-destruct in 5 minutes — mint a fresh one
-            per node.
+            Scan this QR code with the device you want to pair. The code is single-use and
+            self-destructs after its TTL.
           </p>
+
           {joinUrl && (
-            <p className="muted">
-              Link points at <span className="mono">{new URL(joinUrl).host}</span> —
-            the other device must be on the same network. It will show a
-            certificate warning once (self-signed dev cert); choose{" "}
-            <em>Advanced&nbsp;→&nbsp;Proceed</em>.
-            </p>
+            <div className="join-link">
+              <span>{joinUrl}</span>
+              <button
+                className="copy-btn"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(joinUrl);
+                  setCopied(true);
+                }}
+              >
+                {copied ? "COPIED" : "COPY"}
+              </button>
+            </div>
           )}
+
+          <div className="pair-meta">
+            <span>● SINGLE USE</span>
+            <span>⌑ E2EE</span>
+            <span>TTL 05:00</span>
+          </div>
+
           {candidates.length > 1 && (
-            <div className="stack">
-              <p className="muted">
-                Timing out on the other device? This machine has multiple
-                networks — pick the one the other device is actually on
-                (VPNs and virtual adapters are usually wrong):
-              </p>
+            <div className="network-select">
+              <label>NETWORK ORIGIN</label>
               <select
                 value={selectedOrigin}
                 onChange={(e) => setSelectedOrigin(e.target.value)}
@@ -112,32 +133,22 @@ export function PairPanel(props: {
                 ))}
               </select>
               <button className="ghost" onClick={() => void regenerate(selectedOrigin)}>
-                Use this network
+                USE THIS NETWORK
               </button>
             </div>
           )}
+
           {pairing && (
-            <p className="muted">
-              Self-destructs {new Date(pairing.expiresAt).toLocaleTimeString()}
-            </p>
+            <div className="expiry-line">
+              EXPIRES AT {new Date(pairing.expiresAt).toLocaleTimeString()}
+            </div>
           )}
-          <div className="actions">
-            <button
-              className="ghost"
-              disabled={!joinUrl}
-              onClick={async () => {
-                if (joinUrl) {
-                  await navigator.clipboard.writeText(joinUrl);
-                  setCopied(true);
-                }
-              }}
-            >
-              {copied ? "Copied" : "Copy access link"}
-            </button>
-            <button onClick={() => void regenerate()}>Rotate key</button>
-          </div>
+
+          <button className="rotate-btn" onClick={() => void regenerate()}>
+            ↻ ROTATE KEY
+          </button>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

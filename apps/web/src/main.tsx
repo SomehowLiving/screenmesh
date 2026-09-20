@@ -5,6 +5,7 @@ import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <div className="grain-layer" aria-hidden="true" />
     <App />
   </React.StrictMode>,
 );
