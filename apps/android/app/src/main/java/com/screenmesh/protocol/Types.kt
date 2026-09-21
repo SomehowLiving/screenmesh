@@ -94,6 +94,13 @@ data class MeshObject(
     val expiresAt: Long? = null,
 )
 
+/** Chunked file-drop progress (see FileChunkAckPayload), sender side only. */
+@Serializable
+data class ChunkProgress(
+    val totalChunks: Int,
+    val ackedChunks: List<Int> = emptyList(),
+)
+
 @Serializable
 data class Delivery(
     val id: String,
@@ -105,6 +112,10 @@ data class Delivery(
     val deliveredAt: Long? = null,
     val openedAt: Long? = null,
     val options: SendOptions? = null,
+    val chunkProgress: ChunkProgress? = null,
+    /** Last time this delivery made progress (sent, or a chunk was acked) —
+     *  used to detect a stalled chunked transfer and retry or fail it. */
+    val lastActivityAt: Long? = null,
 )
 
 @Serializable

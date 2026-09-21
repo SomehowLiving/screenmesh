@@ -6,12 +6,14 @@ import {
   fromBase64,
   toBase64,
   type CarryBundlePayload,
+  type ChecklistContent,
   type ContinueOnDevicePayload,
   type CreateObjectPayload,
   type Delivery,
   type DeliveryBundle,
   type Device,
   type EnvelopeJson,
+  type FileChunkAckPayload,
   type FileChunkPayload,
   type FileContent,
   type MeshObject,
@@ -46,11 +48,48 @@ import type { WebSocketRelayTransport } from "@screenmesh/transport";
 
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SEEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** No FILE_CHUNK_ACK for a chunked transfer in this long → resend whatever
+ *  hasn't been acked yet (the recipient may have reconnected, or dropped
+ *  one message, without the sender ever finding out otherwise). */
+const FILE_TRANSFER_STALL_MS = 20_000;
+/** No full completion this long after a chunked transfer started → stop
+ *  retrying automatically and let the user retry it explicitly instead of
+ *  hanging as "Sending" forever. */
+const FILE_TRANSFER_FAIL_MS = 3 * 60_000;
 /** How often to sweep expired objects/bundles and advance store-carry-forward. */
 const DEFAULT_SWEEP_INTERVAL_MS = 15_000;
 
 /** Object types whose text is collaboratively editable via Yjs. */
 const EDITABLE_TYPES = new Set(["text", "document", "code", "link"]);
+/** These four share the same {text, title?} content shape, so switching
+ *  between them (e.g. correcting a misdetected type) never touches content. */
+const TEXT_FAMILY_TYPES = new Set<MeshObjectType>(["text", "document", "code", "link"]);
+/** Object types a user can manually reclassify after a wrong auto-detection. */
+export const RETYPEABLE_TYPES: MeshObjectType[] = ["text", "document", "code", "link", "checklist"];
+
+function checklistItemFromLine(line: string): { id: string; text: string; done: boolean } {
+  const done = /^\s*[-*+]?\s*\[[xX]\]\s*/.test(line);
+  const text = line.replace(/^\s*[-*+]?\s*\[[ xX]?\]\s*/, "").replace(/^\s*[-*+]\s+/, "").replace(/^\s*\d+[.)]\s+/, "").trim();
+  return { id: crypto.randomUUID(), text, done };
+}
+
+/** Converts content between the shapes RETYPEABLE_TYPES use. Returns undefined
+ *  for an unsupported pairing (the caller should then leave the object alone). */
+function convertObjectContent(from: MeshObjectType, to: MeshObjectType, content: unknown): unknown | undefined {
+  if (from === to) return content;
+  if (TEXT_FAMILY_TYPES.has(from) && TEXT_FAMILY_TYPES.has(to)) return content;
+  if (TEXT_FAMILY_TYPES.has(from) && to === "checklist") {
+    const text = (content as TextContent | null)?.text ?? "";
+    const items = text.split("\n").map((line) => line.trim()).filter(Boolean).map(checklistItemFromLine);
+    return { items } satisfies ChecklistContent;
+  }
+  if (from === "checklist" && TEXT_FAMILY_TYPES.has(to)) {
+    const items = (content as ChecklistContent | null)?.items ?? [];
+    const text = items.map((item) => `${item.done ? "- [x]" : "- [ ]"} ${item.text}`).join("\n");
+    return { text } satisfies TextContent;
+  }
+  return undefined;
+}
 
 /**
  * Secure file drop: files whose base64 payload exceeds this many
@@ -101,6 +140,12 @@ export interface EngineConfig {
   now?: () => number;
   /** Override the periodic sweep cadence (tests use a short interval). */
   sweepIntervalMs?: number;
+  /** Override how long a chunked file transfer can go without a new
+   *  FILE_CHUNK_ACK before missing chunks are resent (tests use a short interval). */
+  fileTransferStallMs?: number;
+  /** Override how long a chunked file transfer can run without completing
+   *  before it's marked "failed" (tests use a short interval). */
+  fileTransferFailMs?: number;
   /**
    * Fires whenever a NEW object (not a duplicate/already-known one)
    * arrives from another device — whole objects via CREATE_OBJECT, large
@@ -127,13 +172,16 @@ export class MeshEngine {
   private pairingSecret!: Uint8Array;
   /** In-memory Yjs docs for collaboratively edited objects. */
   private readonly ydocs = new Map<string, Y.Doc>();
-  /** In-progress file reassembly buffers, keyed by fileId (in-memory only —
-   *  a reload mid-transfer loses partial progress and needs a re-send). */
+  /** In-progress file reassembly buffers, keyed by fileId. Rehydrated from
+   *  the durable `fileChunks` table in start() so a reload mid-transfer
+   *  doesn't lose progress — this Map is a read/write-through cache over it. */
   private readonly incomingChunks = new Map<
     string,
     { total: number; chunks: Map<number, string>; meta?: FileChunkPayload["meta"] }
   >();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  /** Serializes handleIncoming calls — see start()'s `incoming` handler. */
+  private incomingQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly cfg: EngineConfig) {}
 
@@ -158,6 +206,11 @@ export class MeshEngine {
     await this.recordEvent({ category: "network", type, title, detail, ...(deviceId ? { deviceId } : {}) });
   }
 
+  /** Records local trust-boundary changes without storing secrets or payloads. */
+  async recordSecurityEvent(type: string, title: string, detail: string, deviceId?: string): Promise<void> {
+    await this.recordEvent({ category: "security", type, title, detail, ...(deviceId ? { deviceId } : {}) });
+  }
+
   async start(): Promise<void> {
     const seqSetting = await this.cfg.db.settings.get("mySeq");
     this.seq = typeof seqSetting?.value === "number" ? seqSetting.value : 0;
@@ -168,16 +221,32 @@ export class MeshEngine {
       this.ratchets.set(peerDeviceId, session as unknown as RatchetSession);
     }
 
+    await this.rehydrateIncomingChunks();
+
     await this.cfg.db.seen
       .where("seenAt")
       .below(this.now() - SEEN_RETENTION_MS)
       .delete();
 
     const transport = this.cfg.transport;
+    // Envelopes must be processed one at a time, in arrival order: handling
+    // one mutates and persists this.ratchets' shared Double Ratchet chain
+    // state (read → derive → save), so if two arrive close enough together
+    // to run concurrently (a burst — e.g. a device coming back online to a
+    // backlog of queued messages, or a resend of several missing file
+    // chunks at once), the second can decrypt against a chain state the
+    // first hasn't saved yet and fail ("Cipher job failed"). A relay/WebRTC
+    // message handler is otherwise fire-and-forget with no such ordering
+    // guarantee, so this queues each call behind the previous one's result.
     const incoming = (data: Uint8Array) => {
-      void this.handleIncoming(data).catch((err) => {
-        console.error("screenmesh: failed to process incoming envelope", err);
-      });
+      this.incomingQueue = this.incomingQueue
+        .then(
+          () => this.handleIncoming(data),
+          () => this.handleIncoming(data),
+        )
+        .catch((err) => {
+          console.error("screenmesh: failed to process incoming envelope", err);
+        });
     };
     transport.onMessage(incoming);
     this.cfg.direct?.onMessage(incoming);
@@ -240,6 +309,7 @@ export class MeshEngine {
     const asFile =
       (object.type === "file" || object.type === "image") && (object.content as FileContent);
     const chunked = asFile && asFile.dataB64.length > FILE_CHUNK_THRESHOLD_B64;
+    const totalChunksIfFile = chunked && asFile ? Math.ceil(asFile.dataB64.length / FILE_CHUNK_SIZE_B64) : undefined;
 
     for (const recipientId of recipientIds) {
       const delivery: Delivery = {
@@ -250,6 +320,7 @@ export class MeshEngine {
         status: "queued",
         createdAt: now,
         ...(Object.keys(options).length > 0 ? { options } : {}),
+        ...(totalChunksIfFile !== undefined ? { chunkProgress: { totalChunks: totalChunksIfFile, ackedChunks: [] } } : {}),
       };
       await this.cfg.db.deliveries.add(delivery);
       await this.recordEvent({
@@ -290,7 +361,7 @@ export class MeshEngine {
         sentLive = await this.sendOps(recipientId, ops, DEFAULT_HOP_LIMIT);
       }
       if (sentLive) {
-        await this.cfg.db.deliveries.update(delivery.id, { status: "sending" });
+        await this.cfg.db.deliveries.update(delivery.id, { status: "sending", lastActivityAt: this.now() });
         await this.recordEvent({ category: "transfer", type: "delivery-sent", title: "Payload handed to transport", detail: `${object.type} → ${recipientId}`, deviceId: recipientId, objectId: object.id });
       }
     }
@@ -299,16 +370,20 @@ export class MeshEngine {
 
   /** Send a large file as a sequence of small chunk envelopes; each chunk
    *  is its own carry-eligible envelope. Returns true only if every chunk
-   *  went out live (matching sendOps' live/queued return contract). */
+   *  went out live (matching sendOps' live/queued return contract). Pass
+   *  `onlyChunks` to resend just the chunks that were never acked instead
+   *  of the whole file again (see retryStalledFileTransfers). */
   private async sendFileChunks(
     object: MeshObject,
     file: FileContent,
     recipientId: string,
     options: SendOptions,
+    onlyChunks?: ReadonlySet<number>,
   ): Promise<boolean> {
     const totalChunks = Math.ceil(file.dataB64.length / FILE_CHUNK_SIZE_B64);
     let allLive = true;
     for (let i = 0; i < totalChunks; i++) {
+      if (onlyChunks && !onlyChunks.has(i)) continue;
       const dataB64 = file.dataB64.slice(i * FILE_CHUNK_SIZE_B64, (i + 1) * FILE_CHUNK_SIZE_B64);
       const payload: FileChunkPayload = {
         fileId: object.id,
@@ -338,6 +413,149 @@ export class MeshEngine {
       if (!sentLive) allLive = false;
     }
     return allLive;
+  }
+
+  /** Loads any not-yet-completed incoming file chunks from the durable
+   *  `fileChunks` table back into memory, so a reload or a backgrounded tab
+   *  losing its JS state doesn't discard reassembly progress. If every
+   *  chunk for a file happens to already be present, finishes it right away
+   *  — that would otherwise never happen without a chunk actually re-arriving. */
+  private async rehydrateIncomingChunks(): Promise<void> {
+    const rows = await this.cfg.db.fileChunks.toArray();
+    if (rows.length === 0) return;
+    const byFile = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const bucket = byFile.get(row.fileId);
+      if (bucket) bucket.push(row);
+      else byFile.set(row.fileId, [row]);
+    }
+    for (const [fileId, chunks] of byFile) {
+      const total = chunks[0]!.totalChunks;
+      const entry: { total: number; chunks: Map<number, string>; meta?: FileChunkPayload["meta"] } = {
+        total,
+        chunks: new Map(chunks.map((row) => [row.chunkIndex, row.dataB64])),
+      };
+      const withMeta = chunks.find((row) => row.meta);
+      if (withMeta?.meta) entry.meta = withMeta.meta;
+      this.incomingChunks.set(fileId, entry);
+    }
+    const now = this.now();
+    for (const fileId of [...byFile.keys()]) {
+      await this.finishIncomingFileIfComplete(fileId, now);
+    }
+  }
+
+  /** Shared by the live FILE_CHUNK handler and startup rehydration: if every
+   *  chunk for `fileId` has arrived, materializes the MeshObject, cleans up
+   *  the durable chunk buffer, and records the delivery. Fires
+   *  onObjectReceived directly since this can run outside applyOp's
+   *  per-envelope batching (e.g. at startup). */
+  private async finishIncomingFileIfComplete(fileId: string, now: number): Promise<void> {
+    const entry = this.incomingChunks.get(fileId);
+    if (!entry || entry.chunks.size !== entry.total || !entry.meta) return;
+    const meta = entry.meta;
+    let dataB64 = "";
+    for (let i = 0; i < entry.total; i++) dataB64 += entry.chunks.get(i) ?? "";
+    const object: MeshObject = {
+      id: fileId,
+      workspaceId: this.cfg.workspaceId,
+      type: meta.objectType,
+      content: { name: meta.name, mimeType: meta.mimeType, size: meta.size, dataB64 } satisfies FileContent,
+      createdBy: meta.createdBy,
+      createdAt: meta.createdAt,
+      updatedAt: meta.createdAt,
+      ...(meta.expiresAt !== undefined ? { expiresAt: meta.expiresAt } : {}),
+    };
+    const existingObject = await this.cfg.db.objects.get(object.id);
+    if (!existingObject) await this.cfg.db.objects.put(object);
+    this.incomingChunks.delete(fileId);
+    await this.cfg.db.fileChunks.where("fileId").equals(fileId).delete();
+    await this.recordIncomingDelivery(meta.createdBy, object.id, meta.options, now);
+    if (!existingObject) this.cfg.onObjectReceived?.(object, meta.createdBy);
+  }
+
+  /**
+   * A chunked file transfer normally finishes via FILE_CHUNK_ACK alone —
+   * this only kicks in when something went wrong: no ack progress for a
+   * while (resend the unacked chunks, the recipient may have reconnected
+   * without the sender hearing about it), or no progress for long enough
+   * that it's not worth retrying automatically anymore (fail it, so the UI
+   * can offer a manual retry instead of showing "Sending" forever).
+   */
+  private async retryStalledFileTransfers(): Promise<void> {
+    const now = this.now();
+    const sending = await this.cfg.db.deliveries.where("status").equals("sending").toArray();
+    for (const delivery of sending) {
+      const progress = delivery.chunkProgress;
+      if (!progress || progress.ackedChunks.length >= progress.totalChunks) continue;
+      if (now - delivery.createdAt > (this.cfg.fileTransferFailMs ?? FILE_TRANSFER_FAIL_MS)) {
+        await this.cfg.db.deliveries.update(delivery.id, { status: "failed" });
+        await this.recordEvent({
+          category: "transfer",
+          type: "delivery-failed",
+          title: "File transfer failed",
+          detail: `Gave up after ${Math.round((now - delivery.createdAt) / 1000)}s with ${progress.ackedChunks.length}/${progress.totalChunks} chunks acknowledged`,
+          deviceId: delivery.destinationDeviceId,
+          objectId: delivery.objectId,
+        });
+        continue;
+      }
+      if (now - (delivery.lastActivityAt ?? delivery.createdAt) < (this.cfg.fileTransferStallMs ?? FILE_TRANSFER_STALL_MS)) continue;
+      const object = await this.cfg.db.objects.get(delivery.objectId);
+      if (!object || (object.type !== "file" && object.type !== "image")) continue;
+      const acked = new Set(progress.ackedChunks);
+      const missing = new Set<number>();
+      for (let i = 0; i < progress.totalChunks; i++) if (!acked.has(i)) missing.add(i);
+      await this.sendFileChunks(object, object.content as FileContent, delivery.destinationDeviceId, delivery.options ?? {}, missing);
+      await this.cfg.db.deliveries.update(delivery.id, { lastActivityAt: now });
+      await this.recordEvent({
+        category: "transfer",
+        type: "delivery-retry",
+        title: "Resent missing file chunks",
+        detail: `${missing.size} of ${progress.totalChunks} chunks → ${delivery.destinationDeviceId}`,
+        deviceId: delivery.destinationDeviceId,
+        objectId: delivery.objectId,
+      });
+    }
+  }
+
+  /** Manually retry a "failed" delivery: re-sends the whole object from
+   *  scratch (fresh chunk progress for a file) rather than resuming, since a
+   *  failed transfer's partial ack state is stale enough not to trust. */
+  async retryDelivery(deliveryId: string): Promise<void> {
+    const delivery = await this.cfg.db.deliveries.get(deliveryId);
+    if (!delivery || delivery.status !== "failed") return;
+    const object = await this.cfg.db.objects.get(delivery.objectId);
+    if (!object) return;
+    const now = this.now();
+    const asFile = (object.type === "file" || object.type === "image") && (object.content as FileContent);
+    const chunked = asFile && asFile.dataB64.length > FILE_CHUNK_THRESHOLD_B64;
+    await this.cfg.db.deliveries.update(deliveryId, {
+      status: "queued",
+      createdAt: now,
+      lastActivityAt: now,
+      ...(chunked && asFile
+        ? { chunkProgress: { totalChunks: Math.ceil(asFile.dataB64.length / FILE_CHUNK_SIZE_B64), ackedChunks: [] } }
+        : {}),
+    });
+    const sentLive =
+      chunked && asFile
+        ? await this.sendFileChunks(object, asFile, delivery.destinationDeviceId, delivery.options ?? {})
+        : await this.sendOps(
+            delivery.destinationDeviceId,
+            [
+              this.makeOp("CREATE_OBJECT", object.id, { object } satisfies CreateObjectPayload),
+              this.makeOp("SEND_TO_DEVICE", object.id, {
+                objectId: object.id,
+                ...(delivery.options ? { options: delivery.options } : {}),
+              } satisfies SendToDevicePayload),
+            ],
+            DEFAULT_HOP_LIMIT,
+          );
+    if (sentLive) {
+      await this.cfg.db.deliveries.update(deliveryId, { status: "sending" });
+      await this.recordEvent({ category: "transfer", type: "delivery-sent", title: "Retried payload handed to transport", detail: `${object.type} → ${delivery.destinationDeviceId}`, deviceId: delivery.destinationDeviceId, objectId: object.id });
+    }
   }
 
   /**
@@ -373,6 +591,28 @@ export class MeshEngine {
       this.makeOp("UPDATE_OBJECT", objectId, {
         objectId,
         content,
+        updatedAt: now,
+      } satisfies UpdateObjectPayload),
+    ]);
+  }
+
+  /**
+   * Corrects a wrong auto-detected type (e.g. a markdown document that was
+   * misclassified as a checklist): converts content into the new type's
+   * shape and syncs both the type and content change to other devices.
+   */
+  async retypeObject(objectId: string, newType: MeshObjectType): Promise<void> {
+    const object = await this.cfg.db.objects.get(objectId);
+    if (!object || object.type === newType) return;
+    const content = convertObjectContent(object.type, newType, object.content);
+    if (content === undefined) return;
+    const now = this.now();
+    await this.cfg.db.objects.update(objectId, { type: newType, content, updatedAt: now });
+    await this.broadcastOps([
+      this.makeOp("UPDATE_OBJECT", objectId, {
+        objectId,
+        content,
+        type: newType,
         updatedAt: now,
       } satisfies UpdateObjectPayload),
     ]);
@@ -835,6 +1075,7 @@ export class MeshEngine {
       await this.sweepExpiredObjects();
       await this.attemptCarriedDelivery();
       await this.offerCarrying();
+      await this.retryStalledFileTransfers();
     } catch (err) {
       console.error("screenmesh: periodic sweep failed", err);
     } finally {
@@ -910,10 +1151,10 @@ export class MeshEngine {
         break;
       }
       case "UPDATE_OBJECT": {
-        const { objectId, content, updatedAt } = op.payload as UpdateObjectPayload;
+        const { objectId, content, updatedAt, type } = op.payload as UpdateObjectPayload;
         const object = await this.cfg.db.objects.get(objectId);
         if (object && updatedAt >= object.updatedAt) {
-          await this.cfg.db.objects.update(objectId, { content, updatedAt });
+          await this.cfg.db.objects.update(objectId, { content, updatedAt, ...(type ? { type } : {}) });
         }
         break;
       }
@@ -956,8 +1197,30 @@ export class MeshEngine {
           entry = { total: payload.totalChunks, chunks: new Map() };
           this.incomingChunks.set(payload.fileId, entry);
         }
+        // Duplicate chunk (a retried resend the sender already had an ack for
+        // in flight, or two acks crossed) — nothing new to persist or ack twice for.
+        const isNewChunk = !entry.chunks.has(payload.chunkIndex);
         entry.chunks.set(payload.chunkIndex, payload.dataB64);
         if (payload.meta) entry.meta = payload.meta;
+
+        // Persisted BEFORE acking: if the tab dies right after this write,
+        // start()'s rehydrate sees the chunk as already-received next launch.
+        if (isNewChunk) {
+          await this.cfg.db.fileChunks.put({
+            id: `${payload.fileId}:${payload.chunkIndex}`,
+            fileId: payload.fileId,
+            chunkIndex: payload.chunkIndex,
+            totalChunks: payload.totalChunks,
+            dataB64: payload.dataB64,
+            ...(payload.meta ? { meta: payload.meta } : {}),
+          });
+        }
+        await this.sendOps(senderId, [
+          this.makeOp("FILE_CHUNK_ACK", payload.fileId, {
+            fileId: payload.fileId,
+            chunkIndex: payload.chunkIndex,
+          } satisfies FileChunkAckPayload),
+        ]);
 
         if (entry.chunks.size === entry.total && entry.meta) {
           const meta = entry.meta;
@@ -984,7 +1247,26 @@ export class MeshEngine {
             newObject = object;
           }
           this.incomingChunks.delete(payload.fileId);
+          await this.cfg.db.fileChunks.where("fileId").equals(payload.fileId).delete();
           await this.recordIncomingDelivery(senderId, object.id, meta.options, now);
+        }
+        break;
+      }
+      case "FILE_CHUNK_ACK": {
+        const payload = op.payload as FileChunkAckPayload;
+        const delivery = await this.cfg.db.deliveries
+          .where("objectId")
+          .equals(payload.fileId)
+          .and((d) => d.sourceDeviceId === this.me && d.destinationDeviceId === senderId)
+          .first();
+        if (delivery?.chunkProgress && !delivery.chunkProgress.ackedChunks.includes(payload.chunkIndex)) {
+          await this.cfg.db.deliveries.update(delivery.id, {
+            chunkProgress: {
+              totalChunks: delivery.chunkProgress.totalChunks,
+              ackedChunks: [...delivery.chunkProgress.ackedChunks, payload.chunkIndex],
+            },
+            lastActivityAt: now,
+          });
         }
         break;
       }

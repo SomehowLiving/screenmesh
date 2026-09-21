@@ -3,6 +3,7 @@ import type {
   Delivery,
   DeliveryBundle,
   Device,
+  FileChunkMeta,
   MeshEvent,
   MeshObject,
   Operation,
@@ -51,6 +52,22 @@ export interface PersistedRatchetSession {
 }
 
 /**
+ * A single chunk of an in-progress incoming file drop, persisted as soon as
+ * it arrives — not just held in memory — so a page reload or a backgrounded
+ * tab losing its JS timers doesn't silently erase reassembly progress.
+ * `id` is `${fileId}:${chunkIndex}`; rows are deleted once the file
+ * finishes reassembling into a MeshObject.
+ */
+export interface PersistedFileChunk {
+  id: string;
+  fileId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  dataB64: string;
+  meta?: FileChunkMeta;
+}
+
+/**
  * Local-first persistence (IndexedDB via Dexie). Every device stores its
  * own copy of the relevant workspace data; the server is never the primary
  * database. See docs/Architecture.md §2 (Layer 3).
@@ -72,6 +89,8 @@ export class ScreenMeshDb extends Dexie {
   ydocs!: Table<YDocState, string>;
   objectStates!: Table<ObjectLocalState, string>;
   ratchets!: Table<PersistedRatchetSession, string>;
+  /** Durable buffer for in-progress incoming file-chunk reassembly. */
+  fileChunks!: Table<PersistedFileChunk, string>;
 
   constructor(name = "screenmesh") {
     super(name);
@@ -99,6 +118,9 @@ export class ScreenMeshDb extends Dexie {
     });
     this.version(6).stores({
       objectStates: "objectId, pinned, lastOpenedAt, continueLater",
+    });
+    this.version(7).stores({
+      fileChunks: "id, fileId",
     });
   }
 }

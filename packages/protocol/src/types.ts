@@ -107,6 +107,12 @@ export interface Delivery {
   /** The SendOptions this delivery was created with, kept for enforcement
    *  (deleteAfterOpening, requireConfirmation) and UI display. */
   options?: SendOptions;
+  /** Chunked file-drop progress (see FileChunkAckPayload), sender side only.
+   *  Absent for non-chunked deliveries. */
+  chunkProgress?: { totalChunks: number; ackedChunks: number[] };
+  /** Last time this delivery made progress (sent, or a chunk was acked) —
+   *  used to detect a stalled chunked transfer and retry or fail it. */
+  lastActivityAt?: number;
 }
 
 /** Local-only, append-only operational history. Event metadata never contains object plaintext. */

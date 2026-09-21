@@ -16,6 +16,7 @@ import {
   generateIdentity,
   generateWorkspaceKey,
   initRatchetSession,
+  randomId,
   ratchetEncrypt,
   sealEnvelope,
   sign,
@@ -27,6 +28,8 @@ import { MeshEngine } from "../src/engine.js";
 import {
   DEFAULT_HOP_LIMIT,
   envelopeToJson,
+  pairingRotationAuthorizationBytes,
+  toBase64,
   type DeviceInfo,
   type DeviceType,
 } from "@screenmesh/protocol";
@@ -112,10 +115,16 @@ async function main(): Promise<void> {
     pairingToken: token1,
     device: await info(b, "Engine B", "phone"),
   });
-  await post(`${SERVER}/workspaces/${workspaceId}/pairing-token`, {
+  const rotationUnsigned = {
     deviceId: a.deviceId,
     pairingToken: token2,
     tokenExpiresAt: Date.now() + 60_000,
+    issuedAt: Date.now(),
+    nonce: randomId(),
+  };
+  await post(`${SERVER}/workspaces/${workspaceId}/pairing-token`, {
+    ...rotationUnsigned,
+    signature: toBase64(await sign(a, pairingRotationAuthorizationBytes(workspaceId, rotationUnsigned))),
   });
   await post(`${SERVER}/workspaces/${workspaceId}/join`, {
     pairingToken: token2,

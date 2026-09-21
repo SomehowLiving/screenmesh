@@ -22,7 +22,9 @@ import com.screenmesh.protocol.DeliveryBundle
 import com.screenmesh.protocol.DeliveryStatuses
 import com.screenmesh.protocol.Device
 import com.screenmesh.protocol.DeviceTypes
+import com.screenmesh.protocol.ChunkProgress
 import com.screenmesh.protocol.EnvelopeJson
+import com.screenmesh.protocol.FileChunkAckPayload
 import com.screenmesh.protocol.FileChunkMeta
 import com.screenmesh.protocol.FileChunkPayload
 import com.screenmesh.protocol.FileContent
@@ -67,6 +69,13 @@ private const val DEFAULT_SWEEP_INTERVAL_MS = 15_000L
  */
 private const val FILE_CHUNK_SIZE_B64 = 200_000
 
+/** No FILE_CHUNK_ACK for a chunked transfer in this long → resend whatever
+ *  hasn't been acked yet (mirrors packages/sync/src/engine.ts). */
+private const val FILE_TRANSFER_STALL_MS = 20_000L
+/** No full completion this long after a chunked transfer started → stop
+ *  retrying automatically and let the user retry it explicitly. */
+private const val FILE_TRANSFER_FAIL_MS = 3 * 60_000L
+
 /**
  * Kotlin mirror of packages/sync/src/engine.ts's MeshEngine — the layer
  * tying protocol/crypto/transport together: UI action -> op -> encrypt ->
@@ -74,14 +83,18 @@ private const val FILE_CHUNK_SIZE_B64 = 200_000
  *
  * This is a REDUCED port, not the full engine. Object/delivery/ratchet
  * state lives in memory only (`ConcurrentHashMap`s) — there is no Android
- * storage layer (`packages/storage`'s Dexie/IndexedDB has no port here),
- * so restarting the app loses all objects, deliveries, and ratchet
- * sessions (a lost ratchet session just re-bootstraps from the identity
- * keys + pairing secret, exactly as the ratchet design intends — see
- * docs/Security.md §5). This is not a regression versus the desktop
- * agent (`apps/agent`): it deliberately keeps the same scope too — see
- * apps/agent/src/state.ts's doc comment. Identity + session DO survive a
- * restart, via `LocalState.kt`.
+ * storage layer (`packages/storage`'s Dexie/IndexedDB has no port here).
+ * Object/delivery/ratchet state lives in ConcurrentHashMaps and is lost on
+ * restart UNLESS an optional `stateStore` (EngineStateStore, LocalState.kt)
+ * is configured — a single SharedPreferences JSON blob per workspace/device
+ * (a lost ratchet session just re-bootstraps from the identity keys +
+ * pairing secret regardless, exactly as the ratchet design intends — see
+ * docs/Security.md §5). In-progress INCOMING FILE CHUNKS are deliberately
+ * NOT part of that blob — a chunked file can total tens of megabytes, and
+ * rewriting one ever-larger string per chunk would be O(chunks²) I/O — they
+ * get their own optional `chunkStore` (FileChunkStore.kt), one small file
+ * per chunk. Identity + session survive a restart via `LocalState.kt`
+ * regardless of whether either store is configured.
  *
  * Implemented this pass: identity-backed pairwise ratchet sessions,
  * `sendObject` (CREATE_OBJECT + SEND_TO_DEVICE, or chunked `FILE_CHUNK`
@@ -89,10 +102,12 @@ private const val FILE_CHUNK_SIZE_B64 = 200_000
  * `acceptObject` / `rejectObject`, `updateObjectContent`,
  * `continueOnDevice`, `revokeDevice`, `resolveCapability`, presence sync,
  * store-carry-forward (outbox/carried maps, `periodicSweep`,
- * `CARRY_BUNDLE`), and the verify -> ratchet-decrypt -> apply receive path
- * for CREATE_OBJECT, SEND_TO_DEVICE, UPDATE_OBJECT, DELETE_OBJECT,
- * CONTINUE_ON_DEVICE, MARK_DELIVERED, MARK_OPENED, REJECT_OBJECT,
- * FILE_CHUNK, CARRY_BUNDLE, and REVOKE_DEVICE.
+ * `CARRY_BUNDLE`), chunked-transfer reliability (`FILE_CHUNK_ACK`,
+ * `retryStalledFileTransfers`, `retryDelivery`), and the verify ->
+ * ratchet-decrypt -> apply receive path for CREATE_OBJECT, SEND_TO_DEVICE,
+ * UPDATE_OBJECT, DELETE_OBJECT, CONTINUE_ON_DEVICE, MARK_DELIVERED,
+ * MARK_OPENED, REJECT_OBJECT, FILE_CHUNK, FILE_CHUNK_ACK, CARRY_BUNDLE, and
+ * REVOKE_DEVICE.
  *
  * Explicitly NOT ported (unimplemented ops are silently ignored, matching
  * the TS engine's `default: break` — a scope line, not a bug): Yjs
@@ -116,7 +131,9 @@ interface DirectChannel {
 @Serializable
 private data class OpsEnvelope(val ops: List<Operation>)
 
-/** Reassembly state for one in-progress FILE_CHUNK transfer. */
+/** Reassembly state for one in-progress FILE_CHUNK transfer. Rehydrated
+ *  from FileChunkStore at startup when one is configured, so a process
+ *  restart doesn't lose progress — this is a read/write-through cache over it. */
 private class IncomingFileChunks(val total: Int) {
     val chunks = ConcurrentHashMap<Int, String>()
 
@@ -159,6 +176,14 @@ data class EngineConfig(
     val onContinueOnDevice: ((FocusRequest) -> Unit)? = null,
     /** Optional Android-local persistence for objects/deliveries/outbox state. */
     val stateStore: EngineStateStore? = null,
+    /** Optional durable buffer for in-progress incoming file chunks — see FileChunkStore. */
+    val chunkStore: FileChunkStore? = null,
+    /** Override how long a chunked file transfer can go without a new
+     *  FILE_CHUNK_ACK before missing chunks are resent (tests may want a short interval). */
+    val fileTransferStallMs: Long = FILE_TRANSFER_STALL_MS,
+    /** Override how long a chunked file transfer can run without completing
+     *  before it's marked "failed" (tests may want a short interval). */
+    val fileTransferFailMs: Long = FILE_TRANSFER_FAIL_MS,
 )
 
 class MeshEngine(private val cfg: EngineConfig) {
@@ -193,6 +218,7 @@ class MeshEngine(private val cfg: EngineConfig) {
     fun start() {
         pairingSecret = cfg.workspaceKey.encoded
         restoreState()
+        rehydrateIncomingChunks()
         cfg.transport.onMessage { data ->
             try {
                 handleIncoming(data)
@@ -252,6 +278,11 @@ class MeshEngine(private val cfg: EngineConfig) {
             null
         }
         val chunked = fileContent != null && fileContent.dataB64.length > FILE_CHUNK_SIZE_B64
+        val totalChunksIfFile = if (chunked && fileContent != null) {
+            (fileContent.dataB64.length + FILE_CHUNK_SIZE_B64 - 1) / FILE_CHUNK_SIZE_B64
+        } else {
+            null
+        }
 
         for (recipientId in recipientIds) {
             val delivery = Delivery(
@@ -262,6 +293,7 @@ class MeshEngine(private val cfg: EngineConfig) {
                 status = DeliveryStatuses.QUEUED,
                 createdAt = nowMs,
                 options = if (!options.isEmpty) options else null,
+                chunkProgress = totalChunksIfFile?.let { ChunkProgress(totalChunks = it, ackedChunks = emptyList()) },
             )
             deliveries[delivery.id] = delivery
             persistState()
@@ -287,7 +319,7 @@ class MeshEngine(private val cfg: EngineConfig) {
                 sendOps(recipientId, ops, DEFAULT_HOP_LIMIT)
             }
             if (sentLive) {
-                deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.SENDING)
+                deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.SENDING, lastActivityAt = now())
                 persistState()
             }
         }
@@ -297,12 +329,15 @@ class MeshEngine(private val cfg: EngineConfig) {
     /**
      * Send a large file as a sequence of small chunk envelopes; each chunk
      * is its own carry-eligible envelope. Returns true only if every chunk
-     * went out live (matching sendOps' live/queued return contract).
+     * went out live (matching sendOps' live/queued return contract). Pass
+     * `onlyChunks` to resend just the chunks that were never acked instead
+     * of the whole file again (see retryStalledFileTransfers).
      */
-    private fun sendFileChunks(obj: MeshObject, file: FileContent, recipientId: String, options: SendOptions): Boolean {
+    private fun sendFileChunks(obj: MeshObject, file: FileContent, recipientId: String, options: SendOptions, onlyChunks: Set<Int>? = null): Boolean {
         val totalChunks = (file.dataB64.length + FILE_CHUNK_SIZE_B64 - 1) / FILE_CHUNK_SIZE_B64
         var allLive = true
         for (i in 0 until totalChunks) {
+            if (onlyChunks != null && i !in onlyChunks) continue
             val start = i * FILE_CHUNK_SIZE_B64
             val end = minOf(start + FILE_CHUNK_SIZE_B64, file.dataB64.length)
             val meta = if (i == 0) {
@@ -334,6 +369,134 @@ class MeshEngine(private val cfg: EngineConfig) {
             if (!sentLive) allLive = false
         }
         return allLive
+    }
+
+    /** Loads any not-yet-completed incoming file chunks from FileChunkStore
+     *  back into memory, so a process restart doesn't lose reassembly
+     *  progress. If a file happens to already have every chunk present,
+     *  finishes it right away. */
+    private fun rehydrateIncomingChunks() {
+        val store = cfg.chunkStore ?: return
+        for (fileId in store.inProgressFileIds()) {
+            val total = store.readTotal(fileId) ?: continue
+            val entry = IncomingFileChunks(total)
+            for (index in store.chunkIndexes(fileId)) {
+                store.readChunk(fileId, index)?.let { entry.chunks[index] = it }
+            }
+            entry.meta = store.readMeta(fileId)
+            incomingChunks[fileId] = entry
+            finishIncomingFileIfComplete(fileId, now())
+        }
+    }
+
+    /** Shared by rehydrateIncomingChunks: if every chunk for `fileId` has
+     *  arrived, materializes the MeshObject, cleans up the durable chunk
+     *  buffer, and records the delivery. */
+    private fun finishIncomingFileIfComplete(fileId: String, nowMs: Long) {
+        val entry = incomingChunks[fileId] ?: return
+        val meta = entry.meta ?: return
+        if (entry.chunks.size != entry.total) return
+        val dataB64 = StringBuilder()
+        for (i in 0 until entry.total) dataB64.append(entry.chunks[i] ?: "")
+        val fileObject = MeshObject(
+            id = fileId,
+            workspaceId = cfg.workspaceId,
+            type = meta.objectType,
+            content = Json.encodeToJsonElement(
+                FileContent.serializer(),
+                FileContent(name = meta.name, mimeType = meta.mimeType, size = meta.size, dataB64 = dataB64.toString()),
+            ),
+            createdBy = meta.createdBy,
+            createdAt = meta.createdAt,
+            updatedAt = meta.createdAt,
+            expiresAt = meta.expiresAt,
+        )
+        val existed = objects.containsKey(fileObject.id)
+        if (!existed) objects[fileObject.id] = fileObject
+        incomingChunks.remove(fileId)
+        cfg.chunkStore?.deleteFile(fileId)
+        recordIncomingDelivery(meta.createdBy, fileObject.id, meta.options, nowMs)
+        if (!existed) cfg.onObjectReceived?.invoke(fileObject, meta.createdBy)
+    }
+
+    /**
+     * A chunked file transfer normally finishes via FILE_CHUNK_ACK alone —
+     * this only kicks in when something went wrong: no ack progress for a
+     * while (resend the unacked chunks, the recipient may have reconnected
+     * without the sender hearing about it), or no progress for long enough
+     * that it's not worth retrying automatically anymore (fail it, so the
+     * UI can offer a manual retry instead of showing "sending" forever).
+     */
+    private fun retryStalledFileTransfers() {
+        val nowMs = now()
+        for (delivery in deliveries.values.filter { it.status == DeliveryStatuses.SENDING }) {
+            val progress = delivery.chunkProgress ?: continue
+            if (progress.ackedChunks.size >= progress.totalChunks) continue
+            if (nowMs - delivery.createdAt > cfg.fileTransferFailMs) {
+                deliveries[delivery.id] = delivery.copy(status = DeliveryStatuses.FAILED)
+                persistState()
+                continue
+            }
+            val lastActivity = delivery.lastActivityAt ?: delivery.createdAt
+            if (nowMs - lastActivity < cfg.fileTransferStallMs) continue
+            val obj = objects[delivery.objectId] ?: continue
+            if (obj.type != MeshObjectTypes.FILE && obj.type != MeshObjectTypes.IMAGE) continue
+            val fileContent = try {
+                Json.decodeFromJsonElement(FileContent.serializer(), obj.content)
+            } catch (_: Exception) {
+                continue
+            }
+            val acked = progress.ackedChunks.toSet()
+            val missing = (0 until progress.totalChunks).filter { it !in acked }.toSet()
+            sendFileChunks(obj, fileContent, delivery.destinationDeviceId, delivery.options ?: SendOptions(), missing)
+            deliveries[delivery.id] = delivery.copy(lastActivityAt = nowMs)
+            persistState()
+        }
+    }
+
+    /** Manually retry a "failed" delivery: re-sends the whole object from
+     *  scratch (fresh chunk progress for a file) rather than resuming, since
+     *  a failed transfer's partial ack state is stale enough not to trust. */
+    fun retryDelivery(deliveryId: String) {
+        val delivery = deliveries[deliveryId] ?: return
+        if (delivery.status != DeliveryStatuses.FAILED) return
+        val obj = objects[delivery.objectId] ?: return
+        val nowMs = now()
+        val fileContent = if (obj.type == MeshObjectTypes.FILE || obj.type == MeshObjectTypes.IMAGE) {
+            try {
+                Json.decodeFromJsonElement(FileContent.serializer(), obj.content)
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val chunked = fileContent != null && fileContent.dataB64.length > FILE_CHUNK_SIZE_B64
+        val totalChunksIfFile = if (chunked && fileContent != null) {
+            (fileContent.dataB64.length + FILE_CHUNK_SIZE_B64 - 1) / FILE_CHUNK_SIZE_B64
+        } else {
+            null
+        }
+        deliveries[deliveryId] = delivery.copy(
+            status = DeliveryStatuses.QUEUED,
+            createdAt = nowMs,
+            lastActivityAt = nowMs,
+            chunkProgress = totalChunksIfFile?.let { ChunkProgress(totalChunks = it, ackedChunks = emptyList()) } ?: delivery.chunkProgress,
+        )
+        persistState()
+        val sentLive = if (chunked && fileContent != null) {
+            sendFileChunks(obj, fileContent, delivery.destinationDeviceId, delivery.options ?: SendOptions())
+        } else {
+            val ops = listOf(
+                makeOp(OperationTypes.CREATE_OBJECT, obj.id, Json.encodeToJsonElement(CreateObjectPayload.serializer(), CreateObjectPayload(obj))),
+                makeOp(OperationTypes.SEND_TO_DEVICE, obj.id, Json.encodeToJsonElement(SendToDevicePayload.serializer(), SendToDevicePayload(obj.id, delivery.options))),
+            )
+            sendOps(delivery.destinationDeviceId, ops, DEFAULT_HOP_LIMIT)
+        }
+        if (sentLive) {
+            deliveries[deliveryId] = deliveries[deliveryId]!!.copy(status = DeliveryStatuses.SENDING)
+            persistState()
+        }
     }
 
     /**
@@ -773,6 +936,7 @@ class MeshEngine(private val cfg: EngineConfig) {
             pruneSeen()
             attemptCarriedDelivery()
             offerCarrying()
+            retryStalledFileTransfers()
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -847,7 +1011,11 @@ class MeshEngine(private val cfg: EngineConfig) {
                 val payload = Json.decodeFromJsonElement(UpdateObjectPayload.serializer(), op.payload)
                 val existing = objects[payload.objectId]
                 if (existing != null && payload.updatedAt >= existing.updatedAt) {
-                    objects[payload.objectId] = existing.copy(content = payload.content, updatedAt = payload.updatedAt)
+                    objects[payload.objectId] = existing.copy(
+                        content = payload.content,
+                        updatedAt = payload.updatedAt,
+                        type = payload.type ?: existing.type,
+                    )
                 }
             }
             OperationTypes.DELETE_OBJECT -> {
@@ -892,8 +1060,28 @@ class MeshEngine(private val cfg: EngineConfig) {
             OperationTypes.FILE_CHUNK -> {
                 val payload = Json.decodeFromJsonElement(FileChunkPayload.serializer(), op.payload)
                 val entry = incomingChunks.getOrPut(payload.fileId) { IncomingFileChunks(payload.totalChunks) }
+                // Duplicate chunk (a retried resend the sender already had an ack for
+                // in flight, or two acks crossed) — nothing new to persist or ack twice for.
+                val isNewChunk = !entry.chunks.containsKey(payload.chunkIndex)
                 entry.chunks[payload.chunkIndex] = payload.dataB64
                 if (payload.meta != null) entry.meta = payload.meta
+
+                // Persisted BEFORE acking: if the process dies right after this
+                // write, start()'s rehydrate sees the chunk as already-received
+                // next launch.
+                if (isNewChunk) {
+                    cfg.chunkStore?.saveChunk(payload.fileId, payload.chunkIndex, payload.totalChunks, payload.dataB64, payload.meta)
+                }
+                sendOps(
+                    senderId,
+                    listOf(
+                        makeOp(
+                            OperationTypes.FILE_CHUNK_ACK,
+                            payload.fileId,
+                            Json.encodeToJsonElement(FileChunkAckPayload.serializer(), FileChunkAckPayload(payload.fileId, payload.chunkIndex)),
+                        ),
+                    ),
+                )
 
                 val meta = entry.meta
                 if (meta != null && entry.chunks.size == entry.total) {
@@ -917,7 +1105,21 @@ class MeshEngine(private val cfg: EngineConfig) {
                         newObject = fileObject
                     }
                     incomingChunks.remove(payload.fileId)
+                    cfg.chunkStore?.deleteFile(payload.fileId)
                     recordIncomingDelivery(senderId, fileObject.id, meta.options, nowMs)
+                }
+            }
+            OperationTypes.FILE_CHUNK_ACK -> {
+                val payload = Json.decodeFromJsonElement(FileChunkAckPayload.serializer(), op.payload)
+                val delivery = deliveries.values.find {
+                    it.objectId == payload.fileId && it.sourceDeviceId == me && it.destinationDeviceId == senderId
+                }
+                val progress = delivery?.chunkProgress
+                if (delivery != null && progress != null && payload.chunkIndex !in progress.ackedChunks) {
+                    deliveries[delivery.id] = delivery.copy(
+                        chunkProgress = progress.copy(ackedChunks = progress.ackedChunks + payload.chunkIndex),
+                        lastActivityAt = nowMs,
+                    )
                 }
             }
             OperationTypes.CARRY_BUNDLE -> {

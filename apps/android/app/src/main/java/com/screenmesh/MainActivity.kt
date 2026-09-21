@@ -28,6 +28,7 @@ import com.screenmesh.protocol.MeshObjectTypes
 import com.screenmesh.sync.AppState
 import com.screenmesh.sync.EngineConfig
 import com.screenmesh.sync.DirectChannel
+import com.screenmesh.sync.FileChunkStore
 import com.screenmesh.sync.LocalEngineStateStore
 import com.screenmesh.sync.LocalStateStore
 import com.screenmesh.sync.MeshEngine
@@ -88,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     private var acousticTransport: AcousticTransport? = null
     private lateinit var localState: LocalStateStore
     private lateinit var engineState: LocalEngineStateStore
+    private lateinit var fileChunkStore: FileChunkStore
 
     // Current session, kept around so "Advertise via BLE"/"Write to NFC
     // tag" can mint a new pairing token without the user re-entering
@@ -135,6 +137,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         localState = LocalStateStore(applicationContext)
         engineState = LocalEngineStateStore(applicationContext)
+        fileChunkStore = FileChunkStore(applicationContext)
 
         serverUrlInput = findViewById(R.id.et_server_url)
         pairingCodeInput = findViewById(R.id.et_pairing_code)
@@ -261,6 +264,7 @@ class MainActivity : AppCompatActivity() {
                     appendLog("Received from $senderId: ${obj.content}")
                 },
                 stateStore = engineState,
+                chunkStore = fileChunkStore,
             ),
         )
         engine?.stop()

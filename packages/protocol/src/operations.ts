@@ -19,7 +19,8 @@ export type OperationType =
   | "CONTINUE_ON_DEVICE"
   | "CARRY_BUNDLE"
   | "REJECT_OBJECT"
-  | "FILE_CHUNK";
+  | "FILE_CHUNK"
+  | "FILE_CHUNK_ACK";
 
 export interface Operation<TPayload = unknown> {
   operationId: string;
@@ -34,7 +35,7 @@ export interface Operation<TPayload = unknown> {
 /** A device's view of how far it has seen each peer's oplog. */
 export type SyncVector = Record<string, number>;
 
-import type { MeshObject, SendOptions } from "./types.js";
+import type { MeshObject, MeshObjectType, SendOptions } from "./types.js";
 
 export interface CreateObjectPayload {
   object: MeshObject;
@@ -64,6 +65,9 @@ export interface UpdateObjectPayload {
   objectId: string;
   content: unknown;
   updatedAt: number;
+  /** Present when a reclassification changes the object's type (e.g. a
+   *  misdetected checklist corrected to a document) alongside its content. */
+  type?: MeshObjectType;
 }
 
 /** Ask the target device to open this object for editing. */
@@ -101,19 +105,32 @@ export interface CarryBundlePayload {
  * carries everything needed to do that and is only sent on chunk 0 to
  * avoid repeating it in every chunk.
  */
+export interface FileChunkMeta {
+  objectType: "file" | "image";
+  name: string;
+  mimeType: string;
+  size: number;
+  createdBy: string;
+  createdAt: number;
+  expiresAt?: number;
+  options?: SendOptions;
+}
+
 export interface FileChunkPayload {
   fileId: string;
   chunkIndex: number;
   totalChunks: number;
   dataB64: string;
-  meta?: {
-    objectType: "file" | "image";
-    name: string;
-    mimeType: string;
-    size: number;
-    createdBy: string;
-    createdAt: number;
-    expiresAt?: number;
-    options?: SendOptions;
-  };
+  meta?: FileChunkMeta;
+}
+
+/**
+ * Sent by the receiver immediately after it durably persists a chunk (see
+ * ScreenMeshDb's `fileChunks` table), so the sender can tell which chunks
+ * actually landed and resend only the ones that didn't — instead of either
+ * trusting a fire-and-forget send or resending the whole file blind.
+ */
+export interface FileChunkAckPayload {
+  fileId: string;
+  chunkIndex: number;
 }

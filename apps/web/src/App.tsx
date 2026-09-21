@@ -366,7 +366,7 @@ export function App() {
                 selectedDeviceId={selectedDeviceId}
               />
             ) : activeView === "transfers" ? (
-              <TransfersView db={db} me={me} />
+              <TransfersView db={db} me={me} engine={session.engine} />
             ) : activeView === "mesh" ? (
               <MeshView db={db} />
             ) : activeView === "security" ? (
@@ -464,7 +464,7 @@ function DevicesView(props: {
   );
 }
 
-function TransfersView(props: { db: ScreenMeshDb; me: LocalIdentity }) {
+function TransfersView(props: { db: ScreenMeshDb; me: LocalIdentity; engine: MeshEngine }) {
   // `createdAt` is intentionally not an IndexedDB key on the original
   // delivery store, so sort the small local result in memory. Ordering the
   // table by it throws a Dexie SchemaError and used to blank this route.
@@ -475,7 +475,23 @@ function TransfersView(props: { db: ScreenMeshDb; me: LocalIdentity }) {
   const carried = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
   const nameOf = (id: string) => id === props.me.deviceId ? "This device" : devices.find((device) => device.id === id)?.name ?? "Unknown device";
 
-  return <div className="flex h-full min-h-0 flex-col"><div className="flex items-start justify-between gap-4"><div><h1 className="text-xl font-semibold tracking-[-0.02em]">Transfers</h1><p className="mt-1 text-xs text-muted-foreground">Delivery state across your mesh.</p></div><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{deliveries.length} total</span></div><div className="mt-5 grid shrink-0 gap-3 sm:grid-cols-3"><TransferMetric label="Awaiting route" value={String(outbox.length)} tone="text-warning" /><TransferMetric label="Carrying" value={String(carried.length)} tone="text-info" /><TransferMetric label="Pending approval" value={String(deliveries.filter((delivery) => delivery.status === "pending").length)} tone="text-warning" /></div><div className="mt-6 min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card"><div className="divide-y divide-border">{deliveries.length === 0 ? <EmptyPanel text="No transfers yet" detail="Objects you send and receive will show their delivery state here." /> : deliveries.map((delivery) => { const object = objects.find((item) => item.id === delivery.objectId); const outgoing = delivery.sourceDeviceId === props.me.deviceId; return <div key={delivery.id} className="flex items-center gap-3 px-4 py-3"><span className={`size-2 rounded-full ${delivery.status === "delivered" || delivery.status === "opened" ? "bg-success" : delivery.status === "queued" || delivery.status === "pending" ? "bg-warning" : "bg-muted-foreground/45"}`} /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium capitalize">{object?.type ?? "Payload"}</span><span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{outgoing ? "To" : "From"} {nameOf(outgoing ? delivery.destinationDeviceId : delivery.sourceDeviceId)} · {new Date(delivery.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></span><span className="shrink-0 rounded bg-muted px-2 py-1 text-[10px] capitalize text-muted-foreground">{delivery.status}</span></div>; })}</div></div></div>;
+  return <div className="flex h-full min-h-0 flex-col"><div className="flex items-start justify-between gap-4"><div><h1 className="text-xl font-semibold tracking-[-0.02em]">Transfers</h1><p className="mt-1 text-xs text-muted-foreground">Delivery state across your mesh.</p></div><span className="rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">{deliveries.length} total</span></div><div className="mt-5 grid shrink-0 gap-3 sm:grid-cols-3"><TransferMetric label="Awaiting route" value={String(outbox.length)} tone="text-warning" /><TransferMetric label="Carrying" value={String(carried.length)} tone="text-info" /><TransferMetric label="Pending approval" value={String(deliveries.filter((delivery) => delivery.status === "pending").length)} tone="text-warning" /></div><div className="mt-6 min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card"><div className="divide-y divide-border">{deliveries.length === 0 ? <EmptyPanel text="No transfers yet" detail="Objects you send and receive will show their delivery state here." /> : deliveries.map((delivery) => {
+    const object = objects.find((item) => item.id === delivery.objectId);
+    const outgoing = delivery.sourceDeviceId === props.me.deviceId;
+    const progress = delivery.chunkProgress;
+    const progressLabel = progress && delivery.status === "sending" ? `${progress.ackedChunks.length}/${progress.totalChunks} chunks` : null;
+    return <div key={delivery.id} className="flex items-center gap-3 px-4 py-3">
+      <span className={`size-2 shrink-0 rounded-full ${delivery.status === "delivered" || delivery.status === "opened" ? "bg-success" : delivery.status === "queued" || delivery.status === "pending" ? "bg-warning" : delivery.status === "failed" ? "bg-destructive" : "bg-muted-foreground/45"}`} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium capitalize">{object?.type ?? "Payload"}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{outgoing ? "To" : "From"} {nameOf(outgoing ? delivery.destinationDeviceId : delivery.sourceDeviceId)} · {new Date(delivery.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        {progress && progressLabel && <span className="mt-1 block h-1 w-32 overflow-hidden rounded-full bg-muted" title={progressLabel}><span className="block h-full bg-info" style={{ width: `${Math.round((progress.ackedChunks.length / progress.totalChunks) * 100)}%` }} /></span>}
+      </span>
+      {progressLabel && <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{progressLabel}</span>}
+      <span className={`shrink-0 rounded px-2 py-1 text-[10px] capitalize ${delivery.status === "failed" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>{delivery.status}</span>
+      {delivery.status === "failed" && outgoing && <button type="button" onClick={() => void props.engine.retryDelivery(delivery.id)} className="shrink-0 rounded border border-input px-2 py-1 text-[10px] font-medium hover:bg-accent">Retry</button>}
+    </div>;
+  })}</div></div></div>;
 }
 
 function TransferMetric({ label, value, tone }: { label: string; value: string; tone: string }) { return <div className="rounded-lg border border-border bg-card p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-1 text-xl font-semibold ${tone}`}>{value}</p></div>; }

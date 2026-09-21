@@ -27,6 +27,7 @@ object OperationTypes {
     const val CARRY_BUNDLE = "CARRY_BUNDLE"
     const val REJECT_OBJECT = "REJECT_OBJECT"
     const val FILE_CHUNK = "FILE_CHUNK"
+    const val FILE_CHUNK_ACK = "FILE_CHUNK_ACK"
 }
 
 @Serializable
@@ -56,9 +57,13 @@ data class RevokeDevicePayload(val deviceId: String)
 @Serializable
 data class YjsUpdatePayload(val objectId: String, val updateB64: String)
 
-/** Last-write-wins content replacement (checklist toggles, etc.). */
+/**
+ * Last-write-wins content replacement (checklist toggles, etc.). `type` is
+ * present when a reclassification changes the object's type alongside its
+ * content (e.g. a misdetected checklist corrected to a document).
+ */
 @Serializable
-data class UpdateObjectPayload(val objectId: String, val content: JsonElement, val updatedAt: Long)
+data class UpdateObjectPayload(val objectId: String, val content: JsonElement, val updatedAt: Long, val type: String? = null)
 
 /** Applied by MeshEngine.kt's continueOnDevice / CONTINUE_ON_DEVICE case. */
 @Serializable
@@ -96,4 +101,16 @@ data class FileChunkPayload(
     val totalChunks: Int,
     val dataB64: String,
     val meta: FileChunkMeta? = null,
+)
+
+/**
+ * Sent by the receiver immediately after it durably persists a chunk (see
+ * FileChunkStore), so the sender can tell which chunks actually landed and
+ * resend only the ones that didn't — applied by MeshEngine.kt's
+ * FILE_CHUNK_ACK case.
+ */
+@Serializable
+data class FileChunkAckPayload(
+    val fileId: String,
+    val chunkIndex: Int,
 )
