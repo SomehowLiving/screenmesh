@@ -153,7 +153,7 @@ export function PairPanel(props: {
             {pairing && <span>Self-destructs {formatCountdown(pairing.expiresAt - now)}</span>}
           </div>
 
-          {candidates.length > 1 && (
+          {candidates.length > 0 && (
             <div className="rounded-lg border border-border bg-muted/35 p-3">
               <div className="mb-2.5">
                 <p className="text-xs font-medium">Network interface</p>
