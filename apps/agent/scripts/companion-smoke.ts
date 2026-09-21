@@ -18,9 +18,9 @@ assert(interfaceKind("Tailscale Tunnel") === "vpn", "VPN adapters should be clas
 assert(interfaceKind("Docker Desktop") === "virtual", "Docker adapters should be classified as virtual");
 assert(interfaceKind("Wi-Fi") === "wifi", "Wi-Fi adapters should be classified");
 
-const accepted = handleCompanionRequest({ type: "screenmesh.listNetworkInterfaces" });
+const accepted = await handleCompanionRequest({ type: "screenmesh.listNetworkInterfaces" });
 assert(accepted.ok, "the list request should be accepted");
-const rejected = handleCompanionRequest({ type: "anything-else" });
+const rejected = await handleCompanionRequest({ type: "anything-else" });
 assert(!rejected.ok, "unknown requests must be rejected");
 
 const input = new PassThrough();

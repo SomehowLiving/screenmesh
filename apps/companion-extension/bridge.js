@@ -3,8 +3,9 @@
 // no arbitrary native commands, just the read-only interface-list request.
 window.addEventListener("screenmesh-companion-request", (event) => {
   const requestId = event.detail?.requestId;
-  if (typeof requestId !== "string") return;
-  chrome.runtime.sendMessage({ type: "screenmesh.listNetworkInterfaces" }, (response) => {
+  const request = event.detail?.request;
+  if (typeof requestId !== "string" || !request || typeof request.type !== "string") return;
+  chrome.runtime.sendMessage({ type: "screenmesh.companionRequest", request }, (response) => {
     window.dispatchEvent(new CustomEvent("screenmesh-companion-response", {
       detail: { requestId, response: response ?? { ok: false, error: "Companion did not respond." } }
     }));

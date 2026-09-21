@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "companion": "tsx src/index.ts --companion-native-host",
+    "companion:smoke": "tsx scripts/companion-smoke.ts",
+    "lan:smoke": "tsx scripts/lan-smoke.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
@@ -18,7 +20,8 @@
     "@screenmesh/storage": "workspace:*",
     "@screenmesh/sync": "workspace:*",
     "@screenmesh/transport": "workspace:*",
-    "fake-indexeddb": "^6.0.0"
+    "fake-indexeddb": "^6.0.0",
+    "selfsigned": "5.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -12,7 +12,15 @@ import {
 import { Button } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { LockIcon } from "./mesh-icons.js";
-import { companionRouteLabel, requestCompanionRoutes, type CompanionRoute } from "../lib/companion.js";
+import {
+  companionRouteLabel,
+  getCompanionLanSession,
+  requestCompanionRoutes,
+  startCompanionLanSession,
+  stopCompanionLanSession,
+  type CompanionLanSession,
+  type CompanionRoute,
+} from "../lib/companion.js";
 
 /**
  * Presentation-only masking of the join link: the real, fully-functional
@@ -52,16 +60,26 @@ export function PairPanel(props: {
   const [companionRoutes, setCompanionRoutes] = useState<CompanionRoute[]>([]);
   const [selectedCompanionRoute, setSelectedCompanionRoute] = useState("");
   const [companionChecked, setCompanionChecked] = useState(false);
+  const [lanSession, setLanSession] = useState<CompanionLanSession | null>(null);
+  const [lanSessionBusy, setLanSessionBusy] = useState(false);
   const [selectedOrigin, setSelectedOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Kept only in page memory. SM2 QR generation will use it in the next
+  // phase; it is intentionally never rendered or persisted.
+  const lanSessionTokenRef = useRef<string | null>(null);
   const joinUrl = pairing ? makeJoinUrl(pairing) : null;
 
   async function regenerate(originOverride?: string) {
     try {
       setError(null);
+      if (lanSession) {
+        await stopCompanionLanSession(lanSession.sessionId).catch(() => undefined);
+        setLanSession(null);
+        lanSessionTokenRef.current = null;
+      }
       setPairing(await rotatePairing(props.me, props.workspace, props.workspaceKey, originOverride));
       setCopied(false);
     } catch (err) {
@@ -100,8 +118,47 @@ export function PairPanel(props: {
 
   useEffect(() => {
     void refreshCompanionRoutes();
+    void getCompanionLanSession().then(setLanSession).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function activateLocalListener(): Promise<void> {
+    const route = companionRoutes.find((candidate) => candidate.address === selectedCompanionRoute);
+    if (!route) return;
+    const risky = route.kind === "vpn" || route.kind === "virtual";
+    if (risky && !window.confirm(`Start a LAN listener on ${companionRouteLabel(route)}? Devices reachable through this ${route.kind} interface could attempt the pairing handshake.`)) {
+      return;
+    }
+    try {
+      setError(null);
+      setLanSessionBusy(true);
+      const { session, sessionToken } = await startCompanionLanSession({
+        address: route.address,
+        expiresAt: pairing?.expiresAt ?? Date.now() + 5 * 60_000,
+        ...(risky ? { allowUnsafeRoute: true } : {}),
+      });
+      setLanSession(session);
+      lanSessionTokenRef.current = sessionToken;
+    } catch (err) {
+      setError(`Could not start local listener: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setLanSessionBusy(false);
+    }
+  }
+
+  async function stopLocalListener(): Promise<void> {
+    if (!lanSession) return;
+    try {
+      setLanSessionBusy(true);
+      await stopCompanionLanSession(lanSession.sessionId);
+      setLanSession(null);
+      lanSessionTokenRef.current = null;
+    } catch (err) {
+      setError(`Could not stop local listener: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setLanSessionBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (canvasRef.current && joinUrl) {
@@ -210,7 +267,7 @@ export function PairPanel(props: {
                 <p className="text-xs font-medium">Local companion routes</p>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
                   {companionRoutes.length > 0
-                    ? "Choose the route to use when local pairing becomes available."
+                    ? "Choose an interface, then explicitly activate a temporary local listener."
                     : companionChecked
                       ? "No local companion is connected. Relay pairing will be used."
                       : "Checking for the optional local companion…"}
@@ -238,9 +295,22 @@ export function PairPanel(props: {
                 {companionRoutes.find((route) => route.address === selectedCompanionRoute)?.kind === "virtual" && (
                   <p className="mt-2 text-[11px] text-warning">Virtual adapter selected. It is usually not reachable from a phone.</p>
                 )}
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  This is a route preference only. The current QR remains relay-backed until the companion can host a secure LAN listener.
-                </p>
+                {lanSession ? (
+                  <div className="mt-2 rounded border border-success/30 bg-success/10 p-2 text-[11px] text-success">
+                    <p>Local listener active on {lanSession.address}:{lanSession.port}; expires with this pairing code.</p>
+                    <p className="mt-1 text-muted-foreground">The current QR remains relay-backed. Android pinned-TLS QR bootstrap is the next phase.</p>
+                    <Button size="sm" variant="outline" className="mt-2 h-7 px-2 text-[11px]" disabled={lanSessionBusy} onClick={() => void stopLocalListener()}>
+                      Stop local listener
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <p className="text-[11px] text-muted-foreground">The listener is TLS-protected, bound only to this address, and requires a one-use session token.</p>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={lanSessionBusy || !selectedCompanionRoute} onClick={() => void activateLocalListener()}>
+                      {lanSessionBusy ? "Starting…" : "Activate local listener"}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
           </div>

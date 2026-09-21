@@ -1,5 +1,6 @@
 import os from "node:os";
 import type { Readable, Writable } from "node:stream";
+import { getLanSession, startLanSession, stopLanSession, type LanSessionInfo } from "./lan.js";
 
 /** A non-sensitive description of a local route, intentionally excluding MAC and IPv6 addresses. */
 export interface CompanionNetworkInterface {
@@ -10,10 +11,16 @@ export interface CompanionNetworkInterface {
   recommended: boolean;
 }
 
-export type CompanionRequest = { type: "screenmesh.listNetworkInterfaces" };
+export type CompanionRequest =
+  | { type: "screenmesh.listNetworkInterfaces" }
+  | { type: "screenmesh.startLanSession"; address: string; sessionId: string; sessionToken: string; expiresAt: number; allowUnsafeRoute?: boolean }
+  | { type: "screenmesh.stopLanSession"; sessionId?: string }
+  | { type: "screenmesh.getLanSession" };
 
 export type CompanionResponse =
   | { ok: true; interfaces: CompanionNetworkInterface[] }
+  | { ok: true; session: LanSessionInfo | null }
+  | { ok: true; stopped: boolean }
   | { ok: false; error: string };
 
 const VPN_NAME_PATTERN = /vpn|pritunl|tailscale|zerotier|wireguard|openvpn|nordlynx|tap|tun\d|ppp|utun/i;
@@ -63,11 +70,34 @@ export function listCompanionNetworkInterfaces(): CompanionNetworkInterface[] {
   return interfaces;
 }
 
-export function handleCompanionRequest(message: unknown): CompanionResponse {
-  if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "screenmesh.listNetworkInterfaces") {
-    return { ok: false, error: "Unsupported ScreenMesh Companion request." };
+export async function handleCompanionRequest(message: unknown): Promise<CompanionResponse> {
+  if (!message || typeof message !== "object") return { ok: false, error: "Unsupported ScreenMesh Companion request." };
+  const request = message as Partial<CompanionRequest>;
+  try {
+    switch (request.type) {
+      case "screenmesh.listNetworkInterfaces":
+        return { ok: true, interfaces: listCompanionNetworkInterfaces() };
+      case "screenmesh.getLanSession":
+        return { ok: true, session: getLanSession() };
+      case "screenmesh.stopLanSession":
+        return { ok: true, stopped: await stopLanSession(request.sessionId) };
+      case "screenmesh.startLanSession":
+        if (typeof request.address !== "string" || typeof request.sessionId !== "string" || typeof request.sessionToken !== "string" || typeof request.expiresAt !== "number") {
+          return { ok: false, error: "Invalid LAN session request." };
+        }
+        return { ok: true, session: await startLanSession({
+          address: request.address,
+          sessionId: request.sessionId,
+          sessionToken: request.sessionToken,
+          expiresAt: request.expiresAt,
+          ...(request.allowUnsafeRoute === true ? { allowUnsafeRoute: true } : {}),
+        }) };
+      default:
+        return { ok: false, error: "Unsupported ScreenMesh Companion request." };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Could not manage the LAN session." };
   }
-  return { ok: true, interfaces: listCompanionNetworkInterfaces() };
 }
 
 function writeNativeMessage(output: Writable, message: CompanionResponse): void {
@@ -83,9 +113,11 @@ function writeNativeMessage(output: Writable, message: CompanionResponse): void 
  */
 export function startCompanionNativeHost(input: Readable, output: Writable): void {
   let buffered = Buffer.alloc(0);
+  let queued = Promise.resolve();
   input.on("data", (chunk: Buffer) => {
     buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
-    while (buffered.length >= 4) {
+    queued = queued.then(async () => {
+      while (buffered.length >= 4) {
       const messageLength = buffered.readUInt32LE(0);
       if (messageLength > 1024 * 1024) {
         writeNativeMessage(output, { ok: false, error: "Companion request is too large." });
@@ -95,11 +127,15 @@ export function startCompanionNativeHost(input: Readable, output: Writable): voi
       if (buffered.length < 4 + messageLength) return;
       const raw = buffered.subarray(4, 4 + messageLength).toString("utf8");
       buffered = buffered.subarray(4 + messageLength);
-      try {
-        writeNativeMessage(output, handleCompanionRequest(JSON.parse(raw) as unknown));
-      } catch {
-        writeNativeMessage(output, { ok: false, error: "Invalid Companion request." });
+        try {
+          writeNativeMessage(output, await handleCompanionRequest(JSON.parse(raw) as unknown));
+        } catch {
+          writeNativeMessage(output, { ok: false, error: "Invalid Companion request." });
+        }
       }
-    }
+    }).catch(() => undefined);
   });
+  // The listener exists only while an approved extension holds this native
+  // connection. Do not leave a LAN port behind if Chrome disconnects it.
+  input.once("end", () => { void stopLanSession(); });
 }

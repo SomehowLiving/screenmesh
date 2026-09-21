@@ -2,8 +2,9 @@
 
 This Chromium extension is the deliberately narrow bridge between a user-approved
 ScreenMesh web origin and the locally installed ScreenMesh Companion. It exposes
-only adapter names, IPv4 addresses, and broad adapter kinds; it cannot execute
-commands or read workspace data.
+only adapter names, IPv4 addresses, broad adapter kinds, and typed controls for
+a temporary selected-interface LAN listener; it cannot execute commands or read
+workspace plaintext.
 
 ## Development setup
 
@@ -16,7 +17,9 @@ commands or read workspace data.
 3. Open the intended HTTPS ScreenMesh deployment, click the extension, and select
    **Connect this ScreenMesh site**. The extension requests access to that exact
    site; it injects no bridge into other sites.
-4. Reload ScreenMesh. The web app can now query the companion bridge.
+4. Reload ScreenMesh. The web app can now query routes and, only after an
+   explicit user action, start/stop a short-lived TLS listener bound to one
+   selected address. The listener is not a browser-accessible HTTP API.
 
 For release, package the agent as an installed executable and create the native
 host manifest as part of its installer. Do not ship a manifest that allows
