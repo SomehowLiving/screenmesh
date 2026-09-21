@@ -52,7 +52,7 @@ export function SelectMenu(props: {
         <ChevronDownIcon className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div role="listbox" aria-label={props.ariaLabel} className="absolute left-0 z-40 mt-1.5 max-h-64 w-full min-w-44 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+        <div role="listbox" aria-label={props.ariaLabel} className="absolute left-0 z-40 mt-1.5 max-h-64 w-full min-w-44 overflow-y-auto scrollbar-none rounded-lg border border-border bg-popover p-1 shadow-lg">
           {props.options.map((option) => {
             const active = option.value === props.value;
             return (

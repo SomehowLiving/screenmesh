@@ -128,6 +128,13 @@
 @keyframes mesh-pulse { 50% { opacity: .35; } }
 @utility mesh-pulse { animation: mesh-pulse 1.8s ease-in-out infinite; }
 
+/* Scrollable but no visible track — the content still scrolls (wheel, drag, keyboard), just without the bar. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
 @keyframes view-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @utility view-enter { animation: view-enter 180ms ease-out both; }
 

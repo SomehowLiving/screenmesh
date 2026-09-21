@@ -131,3 +131,28 @@ export function ClipboardIcon(props: IconProps) {
 export function CloseIcon(props: IconProps) {
   return <Icon {...props}><path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></Icon>;
 }
+
+/** Pass fill="currentColor" for the active/pinned state, fill="none" (default) otherwise. */
+export function StarIcon(props: IconProps) {
+  return <Icon {...props}><path d="m10 2.8 2.2 4.6 5 .7-3.6 3.6.8 5-4.4-2.4-4.4 2.4.8-5-3.6-3.6 5-.7Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></Icon>;
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return <Icon {...props}><path d="m7.5 5 5 5-5 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></Icon>;
+}
+
+export function CodeIcon(props: IconProps) {
+  return <Icon {...props}><path d="m7 6.5-3.5 3.5L7 13.5M13 6.5l3.5 3.5-3.5 3.5M11.2 4.5 8.8 15.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></Icon>;
+}
+
+export function ImageIcon(props: IconProps) {
+  return <Icon {...props}><rect x="2.5" y="3.5" width="15" height="13" rx="1.8" stroke="currentColor" strokeWidth="1.4" /><circle cx="7" cy="8" r="1.4" stroke="currentColor" strokeWidth="1.4" /><path d="m4 15 4.2-4.5a1.4 1.4 0 0 1 2 0L13 13l1-1a1.4 1.4 0 0 1 2 0l1.5 1.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></Icon>;
+}
+
+export function DocumentIcon(props: IconProps) {
+  return <Icon {...props}><path d="M6 2.8h5.2L15 6.6v10.6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.8a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M11 2.8v3.8h4M7.2 11h5.6M7.2 13.6h5.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></Icon>;
+}
+
+export function NoteIcon(props: IconProps) {
+  return <Icon {...props}><rect x="3.5" y="3" width="13" height="14" rx="1.6" stroke="currentColor" strokeWidth="1.4" /><path d="M6.5 7h7M6.5 10h7M6.5 13h4.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></Icon>;
+}
