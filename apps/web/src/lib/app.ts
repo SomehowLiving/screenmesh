@@ -1,3 +1,7 @@
+import {
+  pairingRotationAuthorizationBytes,
+  toBase64,
+} from "@screenmesh/protocol";
 import type {
   CreateWorkspaceRequest,
   DeviceInfo,
@@ -330,10 +334,17 @@ export async function rotatePairing(
     serverUrl: `${originOverride ?? (await shareableOrigin())}/api`,
     now: Date.now(),
   });
-  const body: RotatePairingRequest = {
+  const issuedAt = Date.now();
+  const unsigned = {
     deviceId: me.deviceId,
     pairingToken: pairing.pairingToken,
     tokenExpiresAt: pairing.expiresAt,
+    issuedAt,
+    nonce: randomId(),
+  };
+  const body: RotatePairingRequest = {
+    ...unsigned,
+    signature: toBase64(await sign(me, pairingRotationAuthorizationBytes(workspace.id, unsigned))),
   };
   await postJson(`${workspace.serverUrl}/workspaces/${workspace.id}/pairing-token`, body);
   return pairing;

@@ -97,7 +97,7 @@ describe("WorkspaceRegistry.join", () => {
   it("a fresh pairing token issued after one is consumed allows a second device to join", () => {
     const registry = setup();
     registry.join("ws-1", joinReq(), alwaysOffline);
-    registry.rotatePairing("ws-1", "owner", "token-2", Date.now() + 60_000);
+    registry.rotatePairing("ws-1", "owner", "token-2", Date.now() + 60_000, "rotation-nonce-0001");
     const result = registry.join(
       "ws-1",
       joinReq({ pairingToken: "token-2", device: device("second-joiner") }),
@@ -112,16 +112,26 @@ describe("WorkspaceRegistry.rotatePairing", () => {
   it("rejects rotation from a non-owner device", () => {
     const registry = new WorkspaceRegistry();
     registry.create(createReq());
-    const err = registry.rotatePairing("ws-1", "not-the-owner", "token-2", Date.now() + 60_000);
+    const err = registry.rotatePairing("ws-1", "not-the-owner", "token-2", Date.now() + 60_000, "rotation-nonce-0002");
     expect(isRegistryError(err)).toBe(true);
     expect(err?.code).toBe(403);
   });
 
   it("rejects rotation for an unknown workspace", () => {
     const registry = new WorkspaceRegistry();
-    const err = registry.rotatePairing("no-such-workspace", "owner", "token-2", Date.now() + 60_000);
+    const err = registry.rotatePairing("no-such-workspace", "owner", "token-2", Date.now() + 60_000, "rotation-nonce-0003");
     expect(isRegistryError(err)).toBe(true);
     expect(err?.code).toBe(404);
+  });
+
+  it("rejects reusing a signed-request nonce after a rotation", () => {
+    const registry = new WorkspaceRegistry();
+    registry.create(createReq());
+    const nonce = "rotation-nonce-0004";
+    expect(registry.rotatePairing("ws-1", "owner", "token-2", Date.now() + 60_000, nonce)).toBeNull();
+    const err = registry.rotatePairing("ws-1", "owner", "token-3", Date.now() + 60_000, nonce);
+    expect(isRegistryError(err)).toBe(true);
+    expect(err?.code).toBe(409);
   });
 });
 

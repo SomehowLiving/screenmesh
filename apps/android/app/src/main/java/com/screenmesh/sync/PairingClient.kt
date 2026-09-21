@@ -1,6 +1,9 @@
 package com.screenmesh.sync
 
 import com.screenmesh.crypto.DeviceIdentity
+import com.screenmesh.crypto.randomId
+import com.screenmesh.crypto.sign
+import com.screenmesh.crypto.toBase64
 import com.screenmesh.crypto.exportEncryptionPublicKey
 import com.screenmesh.crypto.exportPublicKey
 import com.screenmesh.protocol.DeviceInfo
@@ -70,13 +73,30 @@ fun joinWorkspaceHttp(
 fun rotatePairingTokenHttp(
     serverUrl: String,
     workspaceId: String,
-    callerDeviceId: String,
+    identity: DeviceIdentity,
     pairingToken: String,
     tokenExpiresAt: Long,
 ) {
+    val issuedAt = System.currentTimeMillis()
+    val nonce = randomId()
+    val signature = toBase64(sign(identity, pairingRotationAuthorizationBytes(
+        workspaceId,
+        identity.deviceId,
+        pairingToken,
+        tokenExpiresAt,
+        issuedAt,
+        nonce,
+    )))
     val body = Json.encodeToString(
         RotatePairingRequest.serializer(),
-        RotatePairingRequest(deviceId = callerDeviceId, pairingToken = pairingToken, tokenExpiresAt = tokenExpiresAt),
+        RotatePairingRequest(
+            deviceId = identity.deviceId,
+            pairingToken = pairingToken,
+            tokenExpiresAt = tokenExpiresAt,
+            issuedAt = issuedAt,
+            nonce = nonce,
+            signature = signature,
+        ),
     )
     val request = Request.Builder()
         .url("$serverUrl/workspaces/$workspaceId/pairing-token")
@@ -88,3 +108,22 @@ fun rotatePairingTokenHttp(
         }
     }
 }
+
+/** Kotlin mirror of protocol.pairingRotationAuthorizationBytes(). */
+private fun pairingRotationAuthorizationBytes(
+    workspaceId: String,
+    deviceId: String,
+    pairingToken: String,
+    tokenExpiresAt: Long,
+    issuedAt: Long,
+    nonce: String,
+): ByteArray = listOf(
+    "screenmesh-owner-action-v1",
+    "rotate-pairing",
+    workspaceId,
+    deviceId,
+    pairingToken,
+    tokenExpiresAt.toString(),
+    issuedAt.toString(),
+    nonce,
+).joinToString("\n").toByteArray(Charsets.UTF_8)

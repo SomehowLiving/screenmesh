@@ -19,6 +19,8 @@ interface WorkspaceRecord {
   devices: Map<string, StoredDevice>;
   /** The current pairing token — single-use, short-lived. */
   pairing: { token: string; expiresAt: number; used: boolean } | null;
+  /** Recently accepted signed rotation request nonces, retained only for their auth window. */
+  pairingRotationNonces: Map<string, number>;
 }
 
 export interface RegistryError {
@@ -57,6 +59,7 @@ export class WorkspaceRegistry {
       ownerDeviceId: req.device.id,
       devices: new Map([[req.device.id, { ...req.device, lastSeenAt: Date.now() }]]),
       pairing: { token: req.pairingToken, expiresAt: req.tokenExpiresAt, used: false },
+      pairingRotationNonces: new Map(),
     };
     this.workspaces.set(record.id, record);
     return null;
@@ -99,12 +102,21 @@ export class WorkspaceRegistry {
     deviceId: string,
     token: string,
     tokenExpiresAt: number,
+    nonce: string,
   ): RegistryError | null {
     const ws = this.workspaces.get(workspaceId);
     if (!ws) return { code: 404, message: "unknown workspace" };
     if (ws.ownerDeviceId !== deviceId) {
       return { code: 403, message: "only the workspace owner can mint pairing tokens" };
     }
+    const now = Date.now();
+    for (const [usedNonce, expiresAt] of ws.pairingRotationNonces) {
+      if (expiresAt <= now) ws.pairingRotationNonces.delete(usedNonce);
+    }
+    if (ws.pairingRotationNonces.has(nonce)) {
+      return { code: 409, message: "pairing-token rotation request was already used" };
+    }
+    ws.pairingRotationNonces.set(nonce, now + 60_000);
     ws.pairing = { token, expiresAt: tokenExpiresAt, used: false };
     return null;
   }

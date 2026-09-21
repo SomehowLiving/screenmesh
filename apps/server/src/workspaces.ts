@@ -7,6 +7,7 @@ import type {
   SetCapabilitiesRequest,
 } from "@screenmesh/protocol";
 import { isRegistryError, type WorkspaceRegistry } from "./registry.js";
+import { verifyPairingRotationAuthorization } from "./owner-auth.js";
 
 /**
  * Pairing HTTP API. Creating a workspace registers the owner device and
@@ -51,10 +52,17 @@ export async function registerWorkspaceRoutes(
   app.post("/workspaces/:id/pairing-token", async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as RotatePairingRequest;
-    if (!body?.deviceId || !body.pairingToken) {
+    if (!body?.deviceId || !body.pairingToken || !body.signature || !body.nonce) {
       return reply.code(400).send({ error: "invalid request" });
     }
-    const err = registry.rotatePairing(id, body.deviceId, body.pairingToken, body.tokenExpiresAt);
+    const owner = registry.getDevice(id, body.deviceId);
+    const authorized = owner && await verifyPairingRotationAuthorization({
+      workspaceId: id,
+      ownerPublicKey: owner.publicKey,
+      request: body,
+    });
+    if (!authorized) return reply.code(403).send({ error: "invalid owner authorization" });
+    const err = registry.rotatePairing(id, body.deviceId, body.pairingToken, body.tokenExpiresAt, body.nonce);
     if (err) return reply.code(err.code).send({ error: err.message });
     return reply.send({ ok: true });
   });

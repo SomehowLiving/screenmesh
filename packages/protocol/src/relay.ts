@@ -71,6 +71,34 @@ export interface RotatePairingRequest {
   deviceId: string;
   pairingToken: string;
   tokenExpiresAt: number;
+  /** Milliseconds since epoch, bounded by the server to make signatures short-lived. */
+  issuedAt: number;
+  /** URL-safe random ID; the relay consumes it with the signed request. */
+  nonce: string;
+  /** Base64 Ed25519 signature from the owner device. */
+  signature: string;
+}
+
+/**
+ * Exact bytes an owner signs before minting a new pairing token. This keeps
+ * the endpoint, workspace, token, expiry, freshness timestamp, and replay
+ * nonce in one authenticated statement. All variable identifiers are URL-safe
+ * protocol IDs, so this newline-delimited format is unambiguous.
+ */
+export function pairingRotationAuthorizationBytes(
+  workspaceId: string,
+  request: Pick<RotatePairingRequest, "deviceId" | "pairingToken" | "tokenExpiresAt" | "issuedAt" | "nonce">,
+): Uint8Array {
+  return new TextEncoder().encode([
+    "screenmesh-owner-action-v1",
+    "rotate-pairing",
+    workspaceId,
+    request.deviceId,
+    request.pairingToken,
+    String(request.tokenExpiresAt),
+    String(request.issuedAt),
+    request.nonce,
+  ].join("\n"));
 }
 
 /** POST /workspaces/:id/revoke (owner only) */

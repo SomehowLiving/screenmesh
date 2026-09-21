@@ -330,7 +330,7 @@ class MainActivity : AppCompatActivity() {
             now = System.currentTimeMillis(),
             serverUrl = serverUrl,
         )
-        rotatePairingTokenHttp(serverUrl, workspaceId, identity.deviceId, payload.pairingToken, payload.expiresAt)
+        rotatePairingTokenHttp(serverUrl, workspaceId, identity, payload.pairingToken, payload.expiresAt)
         return encodePairingPayload(payload)
     }
 

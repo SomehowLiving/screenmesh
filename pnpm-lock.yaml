@@ -54,6 +54,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.0.1
         version: 11.3.0
+      '@screenmesh/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@screenmesh/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

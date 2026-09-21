@@ -136,9 +136,16 @@ data class JoinedWorkspaceSummary(val id: String, val name: String, val ownerDev
 @Serializable
 data class JoinWorkspaceResponse(val workspace: JoinedWorkspaceSummary, val devices: List<PresenceEntry>)
 
-/** POST /workspaces/:id/pairing-token (owner only) */
+/** POST /workspaces/:id/pairing-token (owner-signed, replay-resistant) */
 @Serializable
-data class RotatePairingRequest(val deviceId: String, val pairingToken: String, val tokenExpiresAt: Long)
+data class RotatePairingRequest(
+    val deviceId: String,
+    val pairingToken: String,
+    val tokenExpiresAt: Long,
+    val issuedAt: Long,
+    val nonce: String,
+    val signature: String,
+)
 
 /** POST /workspaces/:id/revoke (owner only) */
 @Serializable
