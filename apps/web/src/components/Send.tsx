@@ -11,6 +11,7 @@ import {
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import type { MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
+import { detectContent } from "../lib/content-detection.js";
 import { Button, buttonVariants } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, DeviceTypeIcon, DevicesIcon, PlusIcon } from "./mesh-icons.js";
@@ -117,10 +118,6 @@ function TargetOption(props: { active: boolean; icon: React.ReactNode; label: st
   );
 }
 
-function detectType(text: string): MeshObjectType {
-  return /^https?:\/\/\S+$/i.test(text.trim()) ? "link" : "text";
-}
-
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -156,11 +153,12 @@ export function SendPanel(props: {
 
   const allSelected = others.length > 0 && others.every((d) => selected.has(d.id));
   const recipients = others.filter((d) => selected.has(d.id));
+  const detected = useMemo(() => detectContent(text), [text]);
   // Composer target select mirrors the mesh mock's single-target dropdown,
   // but "Everyone" maps onto our real multi-recipient selection model.
   const targetValue = allSelected ? "__everyone__" : (recipients[0]?.id ?? "");
   const suggested = useMemo(() => {
-    const effectiveType = type === "auto" ? detectType(text) : type;
+    const effectiveType = type === "auto" ? detected.primaryType : type;
     const needed = effectiveType === "code" || effectiveType === "command" || effectiveType === "agent_task"
       ? "terminal"
       : effectiveType === "link" ? "browser" : undefined;
@@ -168,7 +166,7 @@ export function SendPanel(props: {
     const viewingMatches = effectiveType === "image" ? others.filter((device) => device.type === "display" || device.type === "tablet") : [];
     const candidate = [...capabilityMatches.filter((device) => device.status === "online"), ...capabilityMatches, ...viewingMatches.filter((device) => device.status === "online"), ...viewingMatches][0];
     return candidate ? { device: candidate, reason: needed ? `${needed} available` : "suited to viewing" } : null;
-  }, [others, text, type]);
+  }, [detected.primaryType, others, type]);
 
   function selectSingleTarget(deviceId: string) {
     if (deviceId === "__everyone__") {
@@ -208,6 +206,24 @@ export function SendPanel(props: {
     });
     setAttachmentName(picked.name);
     setNote(null);
+  }
+
+  /** A screenshot copied to the clipboard (no filename) pastes as an image
+   *  attachment instead of falling through to plain-text paste. */
+  async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) => item.kind === "file" && item.type.startsWith("image/"));
+    if (!imageItem) return;
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+    event.preventDefault();
+    await attach(blob.name ? blob : new File([blob], `Pasted image.${imageItem.type.split("/")[1] ?? "png"}`, { type: imageItem.type }));
+  }
+
+  async function handleDrop(event: React.DragEvent<HTMLDivElement>) {
+    const dropped = event.dataTransfer.files[0];
+    if (!dropped) return;
+    event.preventDefault();
+    await attach(dropped);
   }
 
   /** Universal capture starts in the normal composer: users can review the
@@ -322,7 +338,7 @@ export function SendPanel(props: {
         setAttachmentName("");
       }
       if (content) {
-        const objectType = type === "auto" ? detectType(content) : type;
+        const objectType = type === "auto" ? detected.primaryType : type;
         if (objectType === "checklist") {
           const items = content
             .split("\n")
@@ -357,7 +373,7 @@ export function SendPanel(props: {
     busy || recipients.length === 0 || (type === "agent_task" ? !taskAction.trim() : !text.trim() && !file);
 
   return (
-    <div className="rounded-xl border border-border bg-card p-3 shadow-[0_1px_2px_oklch(0_0_0/.04)] transition-shadow focus-within:shadow-[0_4px_16px_oklch(0_0_0/.06)]">
+    <div onDrop={(event) => void handleDrop(event)} onDragOver={(event) => event.preventDefault()} className="rounded-xl border border-border bg-card p-3 shadow-[0_1px_2px_oklch(0_0_0/.04)] transition-shadow focus-within:shadow-[0_4px_16px_oklch(0_0_0/.06)]">
       {type === "agent_task" ? (
         <div className="space-y-2 px-1 pt-1">
           <input
@@ -383,6 +399,7 @@ export function SendPanel(props: {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => void handlePaste(e)}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send();
           }}
