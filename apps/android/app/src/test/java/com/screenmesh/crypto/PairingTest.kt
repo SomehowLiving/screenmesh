@@ -8,6 +8,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.SecureRandom
+import com.screenmesh.protocol.LanPairingEndpoint
 
 /** Kotlin mirror of packages/crypto/src/pairing.test.ts. */
 class PairingTest {
@@ -45,6 +46,43 @@ class PairingTest {
         val encoded = encodePairingPayload(payload)
         assertFalse(encoded.contains("example.test"))
         assertNull(decodePairingPayload(encoded).serverUrl)
+    }
+
+    @Test
+    fun `round-trips an SM2 local-companion pairing invitation`() {
+        val payload = createPairingPayload(workspaceId = "ws-1", workspaceKey = "a2V5", now = 1_700_000_000_000L).copy(
+            lanEndpoint = LanPairingEndpoint(
+                address = "192.168.1.42",
+                port = 54321,
+                certificateSha256 = "sha256/${toBase64(ByteArray(32) { 7 })}",
+                sessionId = randomId(),
+                sessionToken = randomId(),
+            ),
+        )
+        val encoded = encodePairingPayload(payload)
+        assertTrue(encoded.startsWith("SM2."))
+        assertEquals(payload, decodePairingPayload(encoded))
+    }
+
+    @Test
+    fun `keeps the SM2 wire format byte-for-byte compatible with TypeScript`() {
+        val payload = com.screenmesh.protocol.PairingPayload(
+            workspaceId = "ws-1",
+            pairingToken = "abcdefghijklmnop",
+            workspaceKey = "a2V5",
+            expiresAt = 1_700_000_000_000L,
+            lanEndpoint = LanPairingEndpoint(
+                address = "192.168.1.42",
+                port = 54321,
+                certificateSha256 = "sha256/${toBase64(ByteArray(32) { 7 })}",
+                sessionId = "abcdefghijklmnop",
+                sessionToken = "qrstuvwxyzABCDEF",
+            ),
+        )
+        assertEquals(
+            "SM2.ws-1.abcdefghijklmnop.a2V5.loyw3v28.192-168-1-42.15wx.BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc.abcdefghijklmnop.qrstuvwxyzABCDEF",
+            encodePairingPayload(payload),
+        )
     }
 
     @Test

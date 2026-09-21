@@ -113,4 +113,20 @@ export interface PairingPayload {
    * into the QR; joiners default to their own origin (same-origin proxy).
    */
   serverUrl?: string;
+  /**
+   * Optional SM2 local-companion bootstrap. It authenticates one pinned TLS
+   * connection before the normal relay join; it never carries plaintext.
+   */
+  lanEndpoint?: LanPairingEndpoint;
+}
+
+export interface LanPairingEndpoint {
+  /** Selected non-loopback IPv4 address, never a hostname or broad bind. */
+  address: string;
+  port: number;
+  /** SHA-256 SPKI pin of the companion's ephemeral TLS certificate. */
+  certificateSha256: string;
+  sessionId: string;
+  /** One-use bearer secret accepted only by that short-lived listener. */
+  sessionToken: string;
 }

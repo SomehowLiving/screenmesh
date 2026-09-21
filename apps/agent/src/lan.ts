@@ -164,7 +164,9 @@ export async function startLanSession(params: {
   );
   const spki = new X509Certificate(certificate.cert).publicKey.export({ type: "spki", format: "der" });
   const certificateSha256 = `sha256/${createHash("sha256").update(spki).digest("base64")}`;
-  const server = tls.createServer({ key: certificate.private, cert: certificate.cert, minVersion: "TLSv1.3" });
+  // Android's supported minimum includes API 26, where TLS 1.3 is not
+  // universal. TLS 1.2+ plus a QR-pinned ephemeral SPKI remains authenticated.
+  const server = tls.createServer({ key: certificate.private, cert: certificate.cert, minVersion: "TLSv1.2" });
   // A pairing listener accepts one intended device, not an unbounded LAN load.
   server.maxConnections = 8;
 

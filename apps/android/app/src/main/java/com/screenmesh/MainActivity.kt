@@ -31,6 +31,7 @@ import com.screenmesh.sync.LocalEngineStateStore
 import com.screenmesh.sync.LocalStateStore
 import com.screenmesh.sync.MeshEngine
 import com.screenmesh.sync.joinWorkspaceHttp
+import com.screenmesh.sync.verifyLanCompanionBootstrap
 import com.screenmesh.sync.rotatePairingTokenHttp
 import com.screenmesh.sync.serialize
 import com.screenmesh.sync.toDeviceIdentity
@@ -199,6 +200,13 @@ class MainActivity : AppCompatActivity() {
         background.execute {
             try {
                 val payload = decodePairingPayload(code)
+                // SM2's local bootstrap is additive: a firewall, wrong route,
+                // or absent companion falls back safely to the normal signed,
+                // relay-backed one-use pairing flow. A pin mismatch never sends
+                // the LAN session token to that listener.
+                val localBootstrapReady = payload.lanEndpoint?.let {
+                    runCatching { verifyLanCompanionBootstrap(it) }.isSuccess
+                } ?: false
                 val identity = generateIdentity()
                 val joined = joinWorkspaceHttp(serverUrl, payload.workspaceId, payload.pairingToken, identity, deviceName)
                 val workspaceKey = importWorkspaceKey(payload.workspaceKey)
@@ -214,7 +222,10 @@ class MainActivity : AppCompatActivity() {
                     ),
                 )
                 startEngine(identity, serverUrl, joined.workspace.id, joined.workspace.ownerDeviceId, workspaceKey, payload.workspaceKey)
-                runOnUiThread { setStatus("Joined \"${joined.workspace.name}\" as $deviceName") }
+                runOnUiThread {
+                    val route = if (payload.lanEndpoint != null && !localBootstrapReady) " (local listener unavailable; relay fallback)" else ""
+                    setStatus("Joined \"${joined.workspace.name}\" as $deviceName$route")
+                }
             } catch (e: Exception) {
                 runOnUiThread { setStatus("Join failed: ${e.message}") }
             }

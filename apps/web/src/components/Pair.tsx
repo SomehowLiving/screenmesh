@@ -124,7 +124,7 @@ export function PairPanel(props: {
 
   async function activateLocalListener(): Promise<void> {
     const route = companionRoutes.find((candidate) => candidate.address === selectedCompanionRoute);
-    if (!route) return;
+    if (!route || !pairing) return;
     const risky = route.kind === "vpn" || route.kind === "virtual";
     if (risky && !window.confirm(`Start a LAN listener on ${companionRouteLabel(route)}? Devices reachable through this ${route.kind} interface could attempt the pairing handshake.`)) {
       return;
@@ -134,11 +134,21 @@ export function PairPanel(props: {
       setLanSessionBusy(true);
       const { session, sessionToken } = await startCompanionLanSession({
         address: route.address,
-        expiresAt: pairing?.expiresAt ?? Date.now() + 5 * 60_000,
+        expiresAt: pairing.expiresAt,
         ...(risky ? { allowUnsafeRoute: true } : {}),
       });
       setLanSession(session);
       lanSessionTokenRef.current = sessionToken;
+      setPairing((current) => current ? {
+        ...current,
+        lanEndpoint: {
+          address: session.address,
+          port: session.port,
+          certificateSha256: session.certificateSha256,
+          sessionId: session.sessionId,
+          sessionToken,
+        },
+      } : current);
     } catch (err) {
       setError(`Could not start local listener: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -153,6 +163,11 @@ export function PairPanel(props: {
       await stopCompanionLanSession(lanSession.sessionId);
       setLanSession(null);
       lanSessionTokenRef.current = null;
+      setPairing((current) => {
+        if (!current?.lanEndpoint) return current;
+        const { lanEndpoint: _lanEndpoint, ...relayOnlyPairing } = current;
+        return relayOnlyPairing;
+      });
     } catch (err) {
       setError(`Could not stop local listener: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -298,7 +313,7 @@ export function PairPanel(props: {
                 {lanSession ? (
                   <div className="mt-2 rounded border border-success/30 bg-success/10 p-2 text-[11px] text-success">
                     <p>Local listener active on {lanSession.address}:{lanSession.port}; expires with this pairing code.</p>
-                    <p className="mt-1 text-muted-foreground">The current QR remains relay-backed. Android pinned-TLS QR bootstrap is the next phase.</p>
+                    <p className="mt-1 text-muted-foreground">This QR now carries the pinned local bootstrap for Android. Browser joins safely use the relay.</p>
                     <Button size="sm" variant="outline" className="mt-2 h-7 px-2 text-[11px]" disabled={lanSessionBusy} onClick={() => void stopLocalListener()}>
                       Stop local listener
                     </Button>
@@ -306,7 +321,7 @@ export function PairPanel(props: {
                 ) : (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <p className="text-[11px] text-muted-foreground">The listener is TLS-protected, bound only to this address, and requires a one-use session token.</p>
-                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={lanSessionBusy || !selectedCompanionRoute} onClick={() => void activateLocalListener()}>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={lanSessionBusy || !selectedCompanionRoute || !pairing} onClick={() => void activateLocalListener()}>
                       {lanSessionBusy ? "Starting…" : "Activate local listener"}
                     </Button>
                   </div>

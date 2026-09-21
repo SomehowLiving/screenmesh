@@ -44,6 +44,49 @@ describe("createPairingPayload / encodePairingPayload / decodePairingPayload", (
     expect(decodePairingPayload(encoded).serverUrl).toBeUndefined();
   });
 
+  it("round-trips an SM2 local-companion invitation without putting the relay URL in the QR", () => {
+    const payload = createPairingPayload({
+      workspaceId: "ws-1",
+      workspaceKey: "a2V5",
+      serverUrl: "https://relay.example.test",
+      now: 1_700_000_000_000,
+    });
+    const withLan = {
+      ...payload,
+      lanEndpoint: {
+        address: "192.168.1.42",
+        port: 54321,
+        certificateSha256: `sha256/${toBase64(new Uint8Array(32).fill(7))}`,
+        sessionId: randomId(),
+        sessionToken: randomId(),
+      },
+    };
+    const encoded = encodePairingPayload(withLan);
+    expect(encoded.startsWith("SM2.")).toBe(true);
+    expect(encoded).not.toContain("relay.example.test");
+    expect(decodePairingPayload(encoded)).toEqual({ ...withLan, serverUrl: undefined });
+  });
+
+  it("rejects malformed SM2 local endpoint fields", () => {
+    expect(() => decodePairingPayload("SM2.ws.tok.a2V5.1.999-1-1-1.1.bad.id.id")).toThrow(/invalid/);
+  });
+
+  it("keeps the SM2 wire format byte-for-byte compatible with Android", () => {
+    expect(encodePairingPayload({
+      workspaceId: "ws-1",
+      pairingToken: "abcdefghijklmnop",
+      workspaceKey: "a2V5",
+      expiresAt: 1_700_000_000_000,
+      lanEndpoint: {
+        address: "192.168.1.42",
+        port: 54321,
+        certificateSha256: `sha256/${toBase64(new Uint8Array(32).fill(7))}`,
+        sessionId: "abcdefghijklmnop",
+        sessionToken: "qrstuvwxyzABCDEF",
+      },
+    })).toBe("SM2.ws-1.abcdefghijklmnop.a2V5.loyw3v28.192-168-1-42.15wx.BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc.abcdefghijklmnop.qrstuvwxyzABCDEF");
+  });
+
   it("applies the default 5-minute TTL when none is given", () => {
     const now = 1_700_000_000_000;
     const payload = createPairingPayload({ workspaceId: "ws-1", workspaceKey: "a2V5", now });

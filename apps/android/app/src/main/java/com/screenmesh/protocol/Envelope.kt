@@ -96,4 +96,15 @@ data class PairingPayload(
     val pairingToken: String,
     val expiresAt: Long,
     val serverUrl: String? = null,
+    val lanEndpoint: LanPairingEndpoint? = null,
+)
+
+/** SM2 QR bootstrap for a temporary selected-interface companion listener. */
+data class LanPairingEndpoint(
+    val address: String,
+    val port: Int,
+    /** `sha256/<base64 SPKI digest>` */
+    val certificateSha256: String,
+    val sessionId: String,
+    val sessionToken: String,
 )
