@@ -15,6 +15,7 @@ import { LockIcon } from "./mesh-icons.js";
 import {
   companionRouteLabel,
   getCompanionLanSession,
+  onCompanionLanDisconnected,
   requestCompanionRoutes,
   startCompanionLanSession,
   stopCompanionLanSession,
@@ -121,6 +122,31 @@ export function PairPanel(props: {
     void getCompanionLanSession().then(setLanSession).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Health is intentionally local-only: the native host verifies that the
+  // selected adapter still exists. It does not claim to detect firewall or
+  // guest-Wi-Fi reachability, which only the Android pairing attempt proves.
+  useEffect(() => {
+    if (!lanSession) return;
+    let active = true;
+    const refresh = () => {
+      void getCompanionLanSession().then((session) => {
+        if (active) setLanSession(session);
+      }).catch(() => {
+        if (active) setLanSession((current) => current ? { ...current, status: "disconnected", unavailableReason: "android-disconnected" } : current);
+      });
+    };
+    const interval = window.setInterval(refresh, 3_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [lanSession?.sessionId]);
+
+  useEffect(() => onCompanionLanDisconnected((_deviceId, reason) => {
+    setLanSession((current) => current ? {
+      ...current,
+      status: reason === "selected-interface-unavailable" ? "route-unavailable" : "disconnected",
+      ...(reason === "selected-interface-unavailable" || reason === "android-disconnected" ? { unavailableReason: reason } : {}),
+    } : current);
+  }), []);
 
   async function activateLocalListener(): Promise<void> {
     const route = companionRoutes.find((candidate) => candidate.address === selectedCompanionRoute);
@@ -311,9 +337,28 @@ export function PairPanel(props: {
                   <p className="mt-2 text-[11px] text-warning">Virtual adapter selected. It is usually not reachable from a phone.</p>
                 )}
                 {lanSession ? (
-                  <div className="mt-2 rounded border border-success/30 bg-success/10 p-2 text-[11px] text-success">
-                    <p>Local listener active on {lanSession.address}:{lanSession.port}; expires with this pairing code.</p>
-                    <p className="mt-1 text-muted-foreground">This QR now carries the pinned local bootstrap for Android. Browser joins safely use the relay.</p>
+                  <div className={`mt-2 rounded border p-2 text-[11px] ${lanSession.status === "connected" ? "border-success/30 bg-success/10 text-success" : lanSession.status === "listening" ? "border-info/30 bg-info/10 text-foreground" : "border-warning/30 bg-warning/10 text-warning"}`}>
+                    {lanSession.status === "connected" ? (
+                      <>
+                        <p>Local Companion connected on {lanSession.address}:{lanSession.port}.</p>
+                        <p className="mt-1 text-muted-foreground">Encrypted envelopes prefer this route; WebRTC and relay remain ready as fallback.</p>
+                      </>
+                    ) : lanSession.status === "listening" ? (
+                      <>
+                        <p>Waiting for Android on {lanSession.address}:{lanSession.port}; expires with this pairing code.</p>
+                        <p className="mt-1 text-muted-foreground">If Android falls back, confirm both devices use the same non-guest Wi-Fi and allow ScreenMesh through the private-network firewall prompt.</p>
+                      </>
+                    ) : lanSession.status === "route-unavailable" ? (
+                      <>
+                        <p>The selected interface is no longer available. ScreenMesh is using WebRTC or encrypted relay.</p>
+                        <p className="mt-1 text-muted-foreground">Refresh routes, select the current Wi-Fi/Ethernet interface, then generate a new code to re-enable Local Companion.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p>The Android local connection ended. ScreenMesh is using WebRTC or encrypted relay.</p>
+                        <p className="mt-1 text-muted-foreground">The local bootstrap token was one-use. Generate a new code to reconnect Local Companion safely.</p>
+                      </>
+                    )}
                     <Button size="sm" variant="outline" className="mt-2 h-7 px-2 text-[11px]" disabled={lanSessionBusy} onClick={() => void stopLocalListener()}>
                       Stop local listener
                     </Button>

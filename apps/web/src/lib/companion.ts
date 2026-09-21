@@ -38,7 +38,9 @@ export interface CompanionLanSession {
   /** SPKI pin for the later Android-native client; never a browser TLS bypass. */
   certificateSha256: string;
   expiresAt: number;
-  status: "listening" | "connected";
+  status: "listening" | "connected" | "disconnected" | "route-unavailable";
+  connectedDeviceId?: string;
+  unavailableReason?: "android-disconnected" | "selected-interface-unavailable";
 }
 
 type CompanionRequest =
@@ -142,6 +144,19 @@ export function onCompanionLanConnected(handler: (deviceId: string) => void): ()
   const listener = (event: Event) => {
     const detail = (event as CustomEvent<{ type?: unknown; deviceId?: unknown }>).detail;
     if (detail?.type === "screenmesh.lan.connected" && typeof detail.deviceId === "string") handler(detail.deviceId);
+  };
+  window.addEventListener("screenmesh-companion-event", listener);
+  return () => window.removeEventListener("screenmesh-companion-event", listener);
+}
+
+/** Lifecycle event for a broken local route; it does not perform a browser network probe. */
+export function onCompanionLanDisconnected(handler: (deviceId: string | null, reason: "android-disconnected" | "selected-interface-unavailable" | "native-host-disconnected") => void): () => void {
+  const listener = (event: Event) => {
+    const detail = (event as CustomEvent<{ type?: unknown; deviceId?: unknown; reason?: unknown }>).detail;
+    if (detail?.type !== "screenmesh.lan.disconnected") return;
+    if (detail.reason !== "android-disconnected" && detail.reason !== "selected-interface-unavailable" && detail.reason !== "native-host-disconnected") return;
+    if (detail.deviceId !== undefined && typeof detail.deviceId !== "string") return;
+    handler(typeof detail.deviceId === "string" ? detail.deviceId : null, detail.reason);
   };
   window.addEventListener("screenmesh-companion-event", listener);
   return () => window.removeEventListener("screenmesh-companion-event", listener);

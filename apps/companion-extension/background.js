@@ -54,6 +54,7 @@ function pumpNativeRequests() {
       });
       nativePort.onDisconnect.addListener(() => {
         const error = chrome.runtime.lastError?.message ?? "ScreenMesh Companion disconnected.";
+        void broadcastLanEnvelope({ type: "screenmesh.lan.disconnected", reason: "native-host-disconnected" });
         nativePort = null;
         activeNativeRequest?.resolve({ ok: false, error });
         activeNativeRequest = null;

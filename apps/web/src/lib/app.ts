@@ -29,7 +29,7 @@ import {
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import { MeshEngine } from "@screenmesh/sync";
 import { WebRtcDirect, WebSocketRelayTransport } from "@screenmesh/transport";
-import { onCompanionLanConnected, onCompanionLanEnvelope, sendCompanionLanEnvelope } from "./companion.js";
+import { getCompanionLanSession, onCompanionLanConnected, onCompanionLanDisconnected, onCompanionLanEnvelope, sendCompanionLanEnvelope } from "./companion.js";
 
 export interface LocalIdentity {
   deviceId: string;
@@ -463,11 +463,25 @@ export function buildEngine(
   // and then the encrypted relay in MeshEngine.
   const lanPeers = new Set<string>();
   const lanHandlers: Array<(data: Uint8Array) => void> = [];
-  onCompanionLanConnected((deviceId) => lanPeers.add(deviceId));
+  let engine: MeshEngine | null = null;
+  onCompanionLanConnected((deviceId) => {
+    lanPeers.add(deviceId);
+    void engine?.recordRouteEvent("lan-connected", "Local Companion connected", "Android is using the selected local route", deviceId);
+  });
+  onCompanionLanDisconnected((deviceId, reason) => {
+    if (deviceId) lanPeers.delete(deviceId);
+    else lanPeers.clear();
+    const detail = reason === "selected-interface-unavailable"
+      ? "The selected Wi-Fi/Ethernet interface disappeared. Delivery is using WebRTC or encrypted relay."
+      : reason === "native-host-disconnected"
+        ? "The browser extension or desktop companion disconnected. Delivery is using WebRTC or encrypted relay."
+        : "The Android local socket closed. Delivery is using WebRTC or encrypted relay.";
+    void engine?.recordRouteEvent("lan-fallback", "Local Companion route unavailable", detail, deviceId ?? undefined);
+  });
   onCompanionLanEnvelope((_sourceDeviceId, data) => {
     for (const handler of lanHandlers) handler(data);
   });
-  const engine = new MeshEngine({
+  engine = new MeshEngine({
     db,
     identity,
     workspaceId: workspace.id,
@@ -480,8 +494,10 @@ export function buildEngine(
                 try {
                   if (await sendCompanionLanEnvelope(peerId, data)) return true;
                   lanPeers.delete(peerId);
+                  void engine?.recordRouteEvent("lan-send-fallback", "Local delivery fell back", "The local socket was unavailable; ScreenMesh continued with WebRTC or encrypted relay.", peerId);
                 } catch {
                   lanPeers.delete(peerId);
+                  void engine?.recordRouteEvent("lan-send-fallback", "Local delivery fell back", "The local companion did not respond; ScreenMesh continued with WebRTC or encrypted relay.", peerId);
                 }
               }
               return direct?.trySend(peerId, data) ?? false;
@@ -492,5 +508,13 @@ export function buildEngine(
             },
     },
   });
+  // A PWA reload can happen after Android has already completed its one-use
+  // bootstrap. Restore that peer state without opening a browser LAN socket.
+  void getCompanionLanSession().then((session) => {
+    if (session?.status === "connected" && session.connectedDeviceId) {
+      lanPeers.add(session.connectedDeviceId);
+      void engine?.recordRouteEvent("lan-restored", "Local Companion route restored", "An authenticated Android local route is still active after this page reload.", session.connectedDeviceId);
+    }
+  }).catch(() => undefined);
   return { engine, transport };
 }

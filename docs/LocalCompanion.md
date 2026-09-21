@@ -107,9 +107,13 @@ WebRTC/relay; the supported LAN client in this phase is Android native.
 
 ## Remaining implementation phases
 
-1. **Negotiation and resilience:** route health checks, relay/WebRTC fallback,
-   reconnect rules, duplicate-delivery tests, firewall/incorrect-route UX, and
-   a visible active-route state.
+1. **Negotiation and resilience:** route health now detects selected-adapter
+   loss locally, reports Android/native-host disconnects, shows active/waiting/
+   fallback state in Pair Device, and records local-route lifecycle events in
+   Activity. A broken or unavailable local path immediately returns to
+   WebRTC/relay; a consumed bootstrap token requires a fresh QR to reconnect.
+   Remaining work: real Wi-Fi evidence, broader repeated-reconnect and
+   duplicate-delivery coverage, and measured fallback timing.
 2. **Release packaging:** package and sign the companion, register a native
    host manifest with the published extension ID, and add installer/removal
    cleanup for the listener/firewall state.
@@ -117,3 +121,6 @@ WebRTC/relay; the supported LAN client in this phase is Android native.
    VPN, guest Wi-Fi isolation, firewall denial, expired/replayed QR, and
    extension/service-worker restarts. Keep the mobile PWA on WebRTC/relay
    unless a managed trusted-LAN HTTPS model is introduced.
+
+See `docs/LocalCompanionValidation.md` for the executable Wi-Fi validation
+runbook, expected firewall/VPN/guest-network behavior, and release evidence.

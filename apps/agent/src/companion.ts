@@ -1,6 +1,6 @@
 import os from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { getLanSession, sendLanEnvelope, setLanConnectedDeviceHandler, setLanEnvelopeHandler, startLanSession, stopLanSession, type LanSessionInfo } from "./lan.js";
+import { getLanSession, sendLanEnvelope, setLanConnectedDeviceHandler, setLanDisconnectedDeviceHandler, setLanEnvelopeHandler, startLanSession, stopLanSession, type LanSessionInfo } from "./lan.js";
 
 /** A non-sensitive description of a local route, intentionally excluding MAC and IPv6 addresses. */
 export interface CompanionNetworkInterface {
@@ -27,7 +27,8 @@ export type CompanionResponse =
 
 export type CompanionEvent =
   | { type: "screenmesh.lan.envelope"; sourceDeviceId: string; envelopeB64: string }
-  | { type: "screenmesh.lan.connected"; deviceId: string };
+  | { type: "screenmesh.lan.connected"; deviceId: string }
+  | { type: "screenmesh.lan.disconnected"; deviceId?: string; reason: "android-disconnected" | "selected-interface-unavailable" | "native-host-disconnected" };
 
 const VPN_NAME_PATTERN = /vpn|pritunl|tailscale|zerotier|wireguard|openvpn|nordlynx|tap|tun\d|ppp|utun/i;
 const VIRTUAL_NAME_PATTERN = /virtual|vethernet|hyper-v|wsl|docker|loopback|vmware|vbox/i;
@@ -134,6 +135,7 @@ export function startCompanionNativeHost(input: Readable, output: Writable): voi
     });
   });
   setLanConnectedDeviceHandler((deviceId) => writeNativeMessage(output, { type: "screenmesh.lan.connected", deviceId }));
+  setLanDisconnectedDeviceHandler((deviceId, reason) => writeNativeMessage(output, { type: "screenmesh.lan.disconnected", deviceId, reason }));
   input.on("data", (chunk: Buffer) => {
     buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
     queued = queued.then(async () => {
@@ -160,6 +162,7 @@ export function startCompanionNativeHost(input: Readable, output: Writable): voi
   input.once("end", () => {
     setLanEnvelopeHandler(null);
     setLanConnectedDeviceHandler(null);
+    setLanDisconnectedDeviceHandler(null);
     void stopLanSession();
   });
 }

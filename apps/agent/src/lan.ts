@@ -17,7 +17,10 @@ export interface LanSessionInfo {
   /** `sha256/<base64>` SPKI pin. A future native client must verify this. */
   certificateSha256: string;
   expiresAt: number;
-  status: "listening" | "connected";
+  /** A consumed bootstrap token deliberately requires a fresh QR to reconnect. */
+  status: "listening" | "connected" | "disconnected" | "route-unavailable";
+  connectedDeviceId?: string;
+  unavailableReason?: "android-disconnected" | "selected-interface-unavailable";
 }
 
 interface ActiveLanSession extends LanSessionInfo {
@@ -35,6 +38,7 @@ interface ActiveLanSession extends LanSessionInfo {
 let activeSession: ActiveLanSession | null = null;
 let inboundEnvelopeHandler: ((sourceDeviceId: string, data: Uint8Array) => void) | null = null;
 let connectedDeviceHandler: ((deviceId: string) => void) | null = null;
+let disconnectedDeviceHandler: ((deviceId: string, reason: NonNullable<LanSessionInfo["unavailableReason"]>) => void) | null = null;
 
 /** Installed only by the Native Messaging host; envelopes are already E2E encrypted. */
 export function setLanEnvelopeHandler(handler: ((sourceDeviceId: string, data: Uint8Array) => void) | null): void {
@@ -43,6 +47,11 @@ export function setLanEnvelopeHandler(handler: ((sourceDeviceId: string, data: U
 
 export function setLanConnectedDeviceHandler(handler: ((deviceId: string) => void) | null): void {
   connectedDeviceHandler = handler;
+}
+
+/** Emits lifecycle-only state; the companion never exposes envelope plaintext. */
+export function setLanDisconnectedDeviceHandler(handler: ((deviceId: string, reason: NonNullable<LanSessionInfo["unavailableReason"]>) => void) | null): void {
+  disconnectedDeviceHandler = handler;
 }
 
 function privateIpv4(address: string): boolean {
@@ -92,6 +101,15 @@ function closeSocket(socket: TLSSocket): void {
   socket.destroy();
 }
 
+function markRouteUnavailable(session: ActiveLanSession, reason: NonNullable<LanSessionInfo["unavailableReason"]>): void {
+  if (session.status === "disconnected" || session.status === "route-unavailable") return;
+  session.status = reason === "selected-interface-unavailable" ? "route-unavailable" : "disconnected";
+  session.unavailableReason = reason;
+  const deviceId = session.remoteDeviceId;
+  session.remoteSocket = null;
+  if (deviceId) disconnectedDeviceHandler?.(deviceId, reason);
+}
+
 function decodeEnvelope(value: unknown): Uint8Array | null {
   if (typeof value !== "string" || value.length === 0 || value.length > Math.ceil(MAX_ENVELOPE_BYTES * 4 / 3) || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
   const bytes = Buffer.from(value, "base64");
@@ -124,7 +142,10 @@ function attachEnvelopeStream(session: ActiveLanSession, socket: TLSSocket, init
 function attachHandshake(session: ActiveLanSession, socket: TLSSocket): void {
   session.sockets.add(socket);
   socket.setTimeout(10_000, () => closeSocket(socket));
-  socket.once("close", () => session.sockets.delete(socket));
+  socket.once("close", () => {
+    session.sockets.delete(socket);
+    if (session.remoteSocket === socket) markRouteUnavailable(session, "android-disconnected");
+  });
   socket.once("error", () => undefined);
 
   const remoteAddress = safeRemoteAddress(socket);
@@ -259,12 +280,22 @@ export async function startLanSession(params: {
 }
 
 function sessionInfo(session: ActiveLanSession): LanSessionInfo {
-  const { sessionId, address, port, certificateSha256, expiresAt, status } = session;
-  return { sessionId, address, port, certificateSha256, expiresAt, status };
+  const { sessionId, address, port, certificateSha256, expiresAt, status, unavailableReason, remoteDeviceId } = session;
+  return { sessionId, address, port, certificateSha256, expiresAt, status, ...(remoteDeviceId ? { connectedDeviceId: remoteDeviceId } : {}), ...(unavailableReason ? { unavailableReason } : {}) };
 }
 
 export function getLanSession(): LanSessionInfo | null {
-  return activeSession ? sessionInfo(activeSession) : null;
+  const session = activeSession;
+  if (!session) return null;
+  // Detect a Wi-Fi disconnect or adapter change locally, without probing a
+  // remote device or pretending that firewall reachability can be known here.
+  if (!listCompanionNetworkInterfaces().some((route) => route.address === session.address)) {
+    markRouteUnavailable(session, "selected-interface-unavailable");
+    for (const socket of session.sockets) closeSocket(socket);
+    for (const socket of session.rawSockets) socket.destroy();
+    void session.server.close();
+  }
+  return sessionInfo(session);
 }
 
 /** Sends an opaque envelope only to the one Android identity that consumed this session. */
@@ -272,8 +303,13 @@ export function sendLanEnvelope(recipientDeviceId: string, data: Uint8Array): bo
   const session = activeSession;
   const socket = session?.remoteSocket;
   if (!session || !socket || socket.destroyed || session.remoteDeviceId !== recipientDeviceId || data.length === 0 || data.length > MAX_ENVELOPE_BYTES) return false;
-  socket.write(`${JSON.stringify({ type: "screenmesh.lan.envelope", envelopeB64: Buffer.from(data).toString("base64") })}\n`);
-  return true;
+  try {
+    socket.write(`${JSON.stringify({ type: "screenmesh.lan.envelope", envelopeB64: Buffer.from(data).toString("base64") })}\n`);
+    return true;
+  } catch {
+    markRouteUnavailable(session, "android-disconnected");
+    return false;
+  }
 }
 
 export async function stopLanSession(sessionId?: string): Promise<boolean> {

@@ -150,6 +150,14 @@ export class MeshEngine {
     await this.cfg.db.events.put({ id: crypto.randomUUID(), timestamp: this.now(), ...event });
   }
 
+  /**
+   * Records local route lifecycle in the Activity ledger. This deliberately
+   * accepts operational metadata only; no caller can add object plaintext.
+   */
+  async recordRouteEvent(type: string, title: string, detail: string, deviceId?: string): Promise<void> {
+    await this.recordEvent({ category: "network", type, title, detail, ...(deviceId ? { deviceId } : {}) });
+  }
+
   async start(): Promise<void> {
     const seqSetting = await this.cfg.db.settings.get("mySeq");
     this.seq = typeof seqSetting?.value === "number" ? seqSetting.value : 0;

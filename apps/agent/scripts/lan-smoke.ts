@@ -1,6 +1,6 @@
 import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import tls from "node:tls";
-import { getLanSession, sendLanEnvelope, setLanEnvelopeHandler, startLanSession, stopLanSession } from "../src/lan.js";
+import { getLanSession, sendLanEnvelope, setLanDisconnectedDeviceHandler, setLanEnvelopeHandler, startLanSession, stopLanSession } from "../src/lan.js";
 import { listCompanionNetworkInterfaces } from "../src/companion.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -77,7 +77,13 @@ try {
   const frame = await outbound;
   assert(frame.type === "screenmesh.lan.envelope" && frame.envelopeB64 === Buffer.from(toPhone).toString("base64"), "companion must forward opaque desktop envelope bytes");
   assert(!sendLanEnvelope(randomUUID(), toPhone), "companion must reject a different recipient identity");
+  const disconnected = new Promise<{ deviceId: string; reason: string }>((resolve) => {
+    setLanDisconnectedDeviceHandler((lostDeviceId, reason) => resolve({ deviceId: lostDeviceId, reason }));
+  });
   socket.destroy();
+  const routeLoss = await disconnected;
+  assert(routeLoss.deviceId === deviceId && routeLoss.reason === "android-disconnected", "closing Android TLS must report route loss for fallback");
+  assert(getLanSession()?.status === "disconnected", "a closed authenticated socket must no longer be advertised as a direct route");
 
   const replay = await connect(session.address, session.port);
   replay.write(`${JSON.stringify({ type: "screenmesh.lan.hello", sessionToken })}\n`);
@@ -89,6 +95,7 @@ try {
   assert(replayClosed, "a consumed session token must not be accepted again");
 } finally {
   setLanEnvelopeHandler(null);
+  setLanDisconnectedDeviceHandler(null);
   await stopLanSession(sessionId);
 }
 

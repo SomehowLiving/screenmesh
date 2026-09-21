@@ -1,6 +1,6 @@
 // This script is registered only after the user explicitly selects an exact
 // ScreenMesh site in the extension popup. It is intentionally a narrow bridge:
-// no arbitrary native commands, just the read-only interface-list request.
+// no arbitrary native commands, only the typed companion route/session bridge.
 window.addEventListener("screenmesh-companion-request", (event) => {
   const requestId = event.detail?.requestId;
   const request = event.detail?.request;
