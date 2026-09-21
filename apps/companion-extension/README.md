@@ -6,6 +6,20 @@ only adapter names, IPv4 addresses, broad adapter kinds, and typed controls for
 a temporary selected-interface LAN listener; it cannot execute commands or read
 workspace plaintext.
 
+## Distribution status
+
+This directory is a **development extension**, not a public download. Load it
+unpacked only for local development. A user-facing Local Companion release needs:
+
+1. a packaged, signed Chromium extension with a stable published extension ID;
+2. a signed desktop companion installer that registers a native-host manifest
+   permitting exactly that extension ID; and
+3. a production PWA build with `VITE_COMPANION_EXTENSION_URL` set to the
+   official HTTPS Chrome Web Store or signed-release page.
+
+Until then, ScreenMesh leaves Local Companion unavailable to ordinary users and
+continues with WebRTC/relay pairing and delivery.
+
 ## Development setup
 
 1. Load this directory as an unpacked extension at `chrome://extensions`.

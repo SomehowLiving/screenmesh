@@ -1,6 +1,18 @@
-# ScreenMesh Architecture Audit and Evolution
+# ScreenMesh Architecture Audit and Evolution — Historical Baseline
 
-Scope: read-only audit of the current repository, including the newly added Local Companion discovery scaffold. “Implemented” below means code exists and is wired into an execution path; it does not mean independently security-audited or production-ready.
+> **Historical snapshot, superseded for Local Companion status.** This audit
+> records the architecture before Local Companion moved beyond route discovery.
+> Its later statements such as “no listener,” “no SM2,” and “no LAN transport”
+> are intentionally preserved as the pre-implementation baseline, not the
+> current state. For the current design and release status, read
+> [`LocalCompanion.md`](LocalCompanion.md),
+> [`Local_companion_Audit_Verdit.md`](Local_companion_Audit_Verdit.md), and
+> [`../progress.md`](../progress.md).
+
+Scope at the time: read-only audit of the repository, including the newly added
+Local Companion discovery scaffold. “Implemented” below means code existed and
+was wired into an execution path; it did not mean independently security-audited
+or production-ready.
 
 ## 1. Executive overview
 

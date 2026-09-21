@@ -25,6 +25,7 @@ import { InboxPanel } from "./components/Inbox.js";
 import { SentPanel } from "./components/Sent.js";
 import { ActivityPanel } from "./components/Activity.js";
 import { LibraryPanel } from "./components/Library.js";
+import { getCompanionLanSession, type CompanionLanSession } from "./lib/companion.js";
 import { Button } from "./components/ui/button.js";
 import { ConfirmDialog } from "./components/ui/confirm-dialog.js";
 import {
@@ -401,6 +402,7 @@ export function App() {
               workspace={wsState.workspace}
               workspaceKey={wsState.key}
               initialPairing={initialPairing}
+              engine={session.engine}
             />
           </div>
         </div>
@@ -496,11 +498,34 @@ function TransfersView(props: { db: ScreenMeshDb; me: LocalIdentity; engine: Mes
 
 function TransferMetric({ label, value, tone }: { label: string; value: string; tone: string }) { return <div className="rounded-lg border border-border bg-card p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-1 text-xl font-semibold ${tone}`}>{value}</p></div>; }
 
+function useLocalCompanionSession(): CompanionLanSession | null | undefined {
+  const [session, setSession] = useState<CompanionLanSession | null | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => void getCompanionLanSession().then((next) => {
+      if (active) setSession(next);
+    }).catch(() => {
+      if (active) setSession(null);
+    });
+    refresh();
+    const timer = window.setInterval(refresh, 3_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+  return session;
+}
+
+function LocalCompanionRouteCard() {
+  const session = useLocalCompanionSession();
+  const status = session === undefined ? "Checking Local Companion" : !session ? "Local Companion unavailable" : session.status === "connected" ? "Local Companion connected" : session.status === "listening" ? "Local Companion waiting" : session.status === "route-unavailable" ? "Selected interface unavailable" : "Local Companion disconnected";
+  const detail = session === undefined ? "Reading local route status without probing your network." : !session ? "WebRTC and encrypted relay remain available; connect the optional extension to use selected-LAN delivery." : session.status === "connected" ? "Pinned TLS is active for the authenticated Android device." : session.status === "listening" ? "The selected-interface listener is ready; Android must complete QR-pinned pairing." : session.status === "route-unavailable" ? "The listener was not moved to another adapter. Delivery continues through WebRTC or encrypted relay." : "The one-use local bootstrap cannot reconnect automatically; generate a fresh QR to restore it.";
+  const active = session?.status === "connected" || session?.status === "listening";
+  return <section className="rounded-lg border border-border bg-card p-4"><p className="text-xs font-semibold">Local Companion route</p><div className="mt-4"><RouteStatus active={active} label={status} detail={detail} /></div></section>;
+}
+
 function MeshView(props: { db: ScreenMeshDb }) {
   const outbox = useLiveQuery(() => props.db.outbox.toArray(), [props.db]) ?? [];
   const carried = useLiveQuery(() => props.db.carried.toArray(), [props.db]) ?? [];
-  const events = useLiveQuery(() => props.db.events.orderBy("timestamp").reverse().limit(8).toArray(), [props.db]) ?? [];
-  return <div className="flex h-full min-h-0 flex-col"><div><h1 className="text-xl font-semibold tracking-[-0.02em]">Mesh</h1><p className="mt-1 text-xs text-muted-foreground">Connectivity and eventual-delivery state on this device.</p></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><section className="rounded-lg border border-border bg-card p-4"><p className="text-xs font-semibold">Route strategy</p><div className="mt-4 space-y-3"><RouteStatus active label="Direct connection" detail="WebRTC is tried before the relay." /><RouteStatus active label="Encrypted relay" detail="Available as the online fallback." /><RouteStatus label="Eventual delivery" detail={`${outbox.length} encrypted bundle${outbox.length === 1 ? "" : "s"} waiting locally.`} /></div></section><section className="rounded-lg border border-border bg-card p-4"><p className="text-xs font-semibold">Store–carry–forward</p><p className="mt-2 text-[11px] leading-5 text-muted-foreground">This device is holding {carried.length} opaque bundle{carried.length === 1 ? "" : "s"} for trusted destinations. Carriers cannot decrypt their contents.</p><div className="mt-4 flex items-center gap-2 text-[11px]"><span className="rounded bg-info/10 px-2 py-1 text-info">{carried.length} carrying</span><span className="rounded bg-warning/10 px-2 py-1 text-warning">{outbox.length} queued</span></div></section></div><section className="mt-5 min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card"><div className="border-b border-border px-4 py-3"><p className="text-xs font-semibold">Recent mesh events</p></div>{events.length === 0 ? <EmptyPanel text="No mesh events yet" detail="Route and delivery events will appear as this device uses the mesh." /> : <div className="divide-y divide-border">{events.map((event) => <div key={event.id} className="flex gap-3 px-4 py-3"><span className={`mt-1.5 size-2 rounded-full ${event.category === "network" ? "bg-info" : event.category === "transfer" ? "bg-warning" : "bg-success"}`} /><span><span className="block text-xs font-medium">{event.title}</span><span className="mt-0.5 block text-[11px] text-muted-foreground">{event.detail}</span></span></div>)}</div>}</section></div>;
+  return <div className="flex h-full min-h-0 flex-col"><div><h1 className="text-xl font-semibold tracking-[-0.02em]">Mesh</h1><p className="mt-1 text-xs text-muted-foreground">Connectivity and eventual-delivery state on this device.</p></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><LocalCompanionRouteCard /><section className="rounded-lg border border-border bg-card p-4"><p className="text-xs font-semibold">Route strategy</p><div className="mt-4 space-y-3"><RouteStatus active label="WebRTC direct" detail="Tried after Local Companion when a peer data channel is available." /><RouteStatus active label="Encrypted relay" detail="Online fallback when no direct route is available." /><RouteStatus active={outbox.length > 0} label="Eventual delivery" detail={`${outbox.length} encrypted bundle${outbox.length === 1 ? "" : "s"} waiting locally.`} /></div></section><section className="rounded-lg border border-border bg-card p-4"><p className="text-xs font-semibold">Store-carry-forward</p><p className="mt-2 text-[11px] leading-5 text-muted-foreground">This device is holding {carried.length} opaque bundle{carried.length === 1 ? "" : "s"} for trusted destinations. Carriers cannot decrypt their contents.</p><div className="mt-4 flex items-center gap-2 text-[11px]"><span className="rounded bg-info/10 px-2 py-1 text-info">{carried.length} carrying</span><span className="rounded bg-warning/10 px-2 py-1 text-warning">{outbox.length} queued</span></div></section></div></div>;
 }
 
 function SecurityView(props: { workspace: LocalWorkspace; me: LocalIdentity }) {

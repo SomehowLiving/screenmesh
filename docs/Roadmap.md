@@ -87,6 +87,7 @@ The capabilities below are implemented or have meaningful automated/emulator cov
 | **NFC tag pairing** | Android NDEF read/write helper and cold/warm intent paths | NFC-equipped phone plus real tag: write expiry, repeated tap behavior, app launch, and clear failure handling. |
 | **Acoustic transport** | Vendored Kotlin modem, loopback/noisy-channel test, wired Android transport | Two real phones in a real room: microphone/speaker response, echo, noise, distance, and practical pairing reliability. |
 | **Android product behavior** | APK build/lint, JVM tests, TypeScript/Kotlin interop, emulator join/send/receive/reconnect | Real device lifecycle, share sheet, rotation, battery/background constraints, and long-running delivery reliability. |
+| **Local Companion (desktop ↔ Android)** | Selected-interface listener, ephemeral pinned TLS, SM2 QR bootstrap, opaque-envelope direct route, and WebRTC/relay fallback; automated listener and socket-loss smoke coverage | Physical Android phone and desktop over Wi-Fi/Ethernet: bidirectional delivery, firewall denial, guest-Wi-Fi isolation, VPN/virtual adapter choice, Wi-Fi loss, extension/native-host restart, and measured fallback timing. See `LocalCompanionValidation.md`. |
 | **Cross-browser / iOS PWA** | Primary implementation is browser-based; Chromium path is the main tested environment | Safari and Firefox: IndexedDB, camera/pairing, clipboard permissions, PWA install, mobile layout, and iPhone/iPad behavior. |
 | **Restrictive networks** | WebRTC direct path and encrypted relay fallback | Corporate firewall/NAT environments, direct-to-relay fallback timing, and decision on TURN deployment. |
 
@@ -99,6 +100,8 @@ Recommended order:
 3. BLE, Wi-Fi Direct, NFC, and acoustic paths one at a time.
 4. Safari/iOS and Firefox checks.
 5. Restrictive network and relay-fallback testing.
+6. Local Companion physical Wi-Fi validation, followed by signed companion and
+   extension packaging/publication.
 
 ## Phase 7 â€” Future transport and protocol research
 

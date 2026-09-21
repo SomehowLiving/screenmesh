@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import type { PairingPayload } from "@screenmesh/protocol";
+import type { MeshEngine } from "@screenmesh/sync";
 import {
   listLanCandidates,
   makeJoinUrl,
@@ -49,13 +50,27 @@ function formatCountdown(msRemaining: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+/** Only an explicitly configured HTTPS release URL is shown to end users. */
+function companionExtensionDownloadUrl(): string | null {
+  const value = import.meta.env.VITE_COMPANION_EXTENSION_URL as string | undefined;
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function PairPanel(props: {
   me: LocalIdentity;
   workspace: LocalWorkspace;
   workspaceKey: CryptoKey;
   initialPairing: PairingPayload | null;
+  engine?: MeshEngine;
 }) {
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
+  const extensionDownloadUrl = companionExtensionDownloadUrl();
   const [pairing, setPairing] = useState<PairingPayload | null>(props.initialPairing);
   const [candidates, setCandidates] = useState<LanCandidate[]>([]);
   const [companionRoutes, setCompanionRoutes] = useState<CompanionRoute[]>([]);
@@ -175,6 +190,7 @@ export function PairPanel(props: {
           sessionToken,
         },
       } : current);
+      void props.engine?.recordSecurityEvent("lan-listener-armed", "Pinned local listener armed", "A temporary listener is bound only to the user-selected interface and requires a one-use token.");
     } catch (err) {
       setError(`Could not start local listener: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -194,6 +210,7 @@ export function PairPanel(props: {
         const { lanEndpoint: _lanEndpoint, ...relayOnlyPairing } = current;
         return relayOnlyPairing;
       });
+      void props.engine?.recordSecurityEvent("lan-listener-stopped", "Pinned local listener stopped", "The temporary Local Companion listener was stopped on this device.");
     } catch (err) {
       setError(`Could not stop local listener: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -367,11 +384,25 @@ export function PairPanel(props: {
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <p className="text-[11px] text-muted-foreground">The listener is TLS-protected, bound only to this address, and requires a one-use session token.</p>
                     <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={lanSessionBusy || !selectedCompanionRoute || !pairing} onClick={() => void activateLocalListener()}>
-                      {lanSessionBusy ? "Starting…" : "Activate local listener"}
+                      {lanSessionBusy ? "Starting…" : "Activate Local Companion"}
                     </Button>
                   </div>
                 )}
               </>
+            )}
+            {companionRoutes.length === 0 && companionChecked && (
+              <div className="mt-2 rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
+                <p>{extensionDownloadUrl ? "Install the ScreenMesh Local Companion extension, connect it to this site, then refresh routes." : "The ScreenMesh Local Companion extension is not published for download yet. Relay pairing remains available."}</p>
+                {extensionDownloadUrl ? (
+                  <Button asChild size="sm" variant="outline" className="mt-2 h-7 px-2 text-[11px]">
+                    <a href={extensionDownloadUrl} target="_blank" rel="noreferrer">Get Local Companion extension</a>
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" className="mt-2 h-7 px-2 text-[11px]" disabled>
+                    Activate Local Companion
+                  </Button>
+                )}
+              </div>
             )}
           </div>
           <div className="border-t border-border pt-3">

@@ -90,20 +90,22 @@ The Local Companion milestones were last validated with:
 
 These are automated checks, not a production or real-network certification.
 
+## Completed resilience work
+
+- Pair Device distinguishes listener waiting, Android connected, Android socket
+  loss, and selected-interface loss.
+- The companion checks only whether the selected local adapter still exists; it
+  does not falsely claim to predict firewall, guest-Wi-Fi, or peer reachability.
+- Android socket loss, extension/native-host loss, and local-send failure remove
+  the LAN peer and retain WebRTC → relay → outbox fallback.
+- Mesh shows current Local Companion status. Activity records local route
+  lifecycle metadata. Security remains a posture page and never displays keys,
+  pairing secrets, or object content.
+- `docs/LocalCompanionValidation.md` provides the real-device Wi-Fi test plan.
+
 ## Remaining work, in order
 
-1. **Resilience and route visibility**
-   - Add active-route status, route-health events, reconnect/backoff rules,
-     and clear explanations for local-route, extension, firewall, and VPN
-     failures.
-   - Define deterministic failover and recovery behavior across Local
-     Companion, WebRTC, relay, and the outbox.
-   - Add tests for listener/extension restarts, socket loss during send,
-     repeated reconnects, and direct-plus-fallback duplicate delivery.
-   - Exit criterion: users can see which route is active and delivery recovers
-     without manual re-send when the local route disappears.
-
-2. **Real-device and hostile-network validation**
+1. **Real-device and hostile-network validation**
    - Test an actual Android phone and desktop over Wi-Fi and Ethernet.
    - Exercise VPN/virtual adapters, guest-Wi-Fi isolation, firewall denial,
      incorrect route selection, expired and replayed SM2 QR codes, and
@@ -113,7 +115,7 @@ These are automated checks, not a production or real-network certification.
    - Exit criterion: documented evidence that both directions send and receive
      over selected LAN routes and safely fall back on failure.
 
-3. **Release packaging and deployment**
+2. **Release packaging and deployment**
    - Package and sign the desktop companion and Chromium extension.
    - Register the native-host manifest with the final extension ID and add
      clean install, upgrade, uninstall, and listener/firewall cleanup paths.
@@ -123,7 +125,7 @@ These are automated checks, not a production or real-network certification.
    - Exit criterion: a fresh-user installation can pair, activate Local
      Companion, update safely, and remove cleanly.
 
-4. **Broader production hardening**
+3. **Broader production hardening**
    - Complete the existing Phase 6 real-device checks for PWA, Android
      lifecycle, cross-browser/iOS behavior, nearby radios, and restrictive
      networks.
@@ -139,6 +141,9 @@ These are automated checks, not a production or real-network certification.
 - Route discovery is advisory, not a reachability or firewall test.
 - Packaged/signed installer and real Android-phone-on-Wi-Fi validation are
   still required before treating Local Companion as production-ready.
+- The extension is source-only today. The PWA can show an official extension
+  link only after a signed release exists and `VITE_COMPANION_EXTENSION_URL`
+  points to its official HTTPS store/release page.
 
 ## Key references
 

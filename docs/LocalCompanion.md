@@ -124,3 +124,13 @@ WebRTC/relay; the supported LAN client in this phase is Android native.
 
 See `docs/LocalCompanionValidation.md` for the executable Wi-Fi validation
 runbook, expected firewall/VPN/guest-network behavior, and release evidence.
+
+## Download link configuration
+
+The Pair Device UI displays a **Get Local Companion extension** link only when
+the production PWA is built with `VITE_COMPANION_EXTENSION_URL` set to the
+official HTTPS Chrome Web Store listing or signed-release page. Do not point it
+at a development unpacked-extension folder or an unsigned third-party mirror.
+Until a signed extension and matching native companion installer are published,
+the UI correctly states that Local Companion is not yet available for download
+and retains normal WebRTC/relay pairing.

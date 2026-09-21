@@ -87,7 +87,11 @@ export function ActivityPanel(props: { db: ScreenMeshDb; me: LocalIdentity }) {
       title: event.title,
       detail: event.detail,
       ...(event.type === "delivery-queued" ? { reason: "No active route was available. The encrypted bundle stays on this device and will retry automatically." } : {}),
-      tone: event.type.includes("offline") ? "muted" : event.type.includes("queued") ? "warning" : "success",
+      tone: event.type.includes("fallback") || event.type.includes("unavailable") || event.type.includes("disconnected") || event.type.includes("queued")
+        ? "warning"
+        : event.type.includes("offline")
+          ? "muted"
+          : event.category === "security" ? "info" : "success",
     }));
     const deliveryEvents = ledger.length === 0 ? deliveries.map((delivery) => deliveryEvent(delivery, objects, devices, props.me)) : [];
     const deviceEvents: ActivityEvent[] = devices.map((device) => ({

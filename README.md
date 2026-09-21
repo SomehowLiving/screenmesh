@@ -28,6 +28,7 @@ flowchart LR
 - Send text, documents, links, code, images, files, checklists, clipboard content, commands, and structured agent tasks.
 - Send to a specific device, everyone, or a device advertising a capability such as `terminal` or `browser`.
 - Keep working with objects after arrival: edit collaborative text/documents, update checklists, copy, download, open, pin, tag, and continue later.
+- Paste naturally: the composer locally detects standalone links, code, checklists, documents, and mixed text-with-links. The Library can filter detected content such as links inside a note without losing its surrounding context.
 - Queue encrypted objects safely when a target is offline.
 - Inspect delivery, routing, device, and security state only when you need to understand what happened.
 

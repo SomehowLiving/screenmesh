@@ -467,6 +467,7 @@ export function buildEngine(
   onCompanionLanConnected((deviceId) => {
     lanPeers.add(deviceId);
     void engine?.recordRouteEvent("lan-connected", "Local Companion connected", "Android is using the selected local route", deviceId);
+    void engine?.recordSecurityEvent("lan-pinned-peer-authenticated", "Pinned local pairing verified", "Android completed the QR-pinned TLS and one-use-token bootstrap.", deviceId);
   });
   onCompanionLanDisconnected((deviceId, reason) => {
     if (deviceId) lanPeers.delete(deviceId);
