@@ -396,7 +396,14 @@ export async function leaveWorkspace(db: ScreenMeshDb): Promise<void> {
 export function makeJoinUrl(payload: PairingPayload): string {
   // The pairing code is URL-safe by construction — no percent-encoding,
   // which keeps the QR in the compact alphanumeric-ish density range.
-  const origin = (payload.serverUrl ?? serverBaseUrl()).replace(/\/api$/, "");
+  // A production relay is an API service, not the web application. Opening
+  // its root produces the Fastify "Route GET:/ not found" response. Open the
+  // deployed app instead; once loaded, it reads VITE_RELAY_ORIGIN to join via
+  // the relay. Local development retains the advertised LAN/Vite origin.
+  const relayOrigin = import.meta.env.VITE_RELAY_ORIGIN as string | undefined;
+  const origin = relayOrigin
+    ? location.origin
+    : (payload.serverUrl ?? serverBaseUrl()).replace(/\/api$/, "");
   return `${origin}/#join=${encodePairingPayload(payload)}`;
 }
 
