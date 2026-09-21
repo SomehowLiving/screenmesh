@@ -23,6 +23,7 @@ import type { SetCapabilitiesRequest } from "@screenmesh/protocol";
 import { loadState, saveState } from "./state.js";
 import { joinWorkspace, postJson } from "./join.js";
 import { handleIncomingObject } from "./handleObject.js";
+import { startCompanionNativeHost } from "./companion.js";
 
 const STATE_PATH =
   process.env.SCREENMESH_AGENT_STATE ??
@@ -111,7 +112,13 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv.includes("--companion-native-host")) {
+  // This mode is launched only by the ScreenMesh browser extension. Do not
+  // write status output here: Chrome treats stdout as its binary protocol.
+  startCompanionNativeHost(process.stdin, process.stdout);
+} else {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

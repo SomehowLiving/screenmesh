@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "companion": "tsx src/index.ts --companion-native-host",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },

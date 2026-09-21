@@ -1,0 +1,7 @@
+{
+  "name": "com.screenmesh.companion",
+  "description": "ScreenMesh Local Companion",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_SCREENMESH_AGENT_LAUNCHER",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://REPLACE_WITH_PUBLISHED_EXTENSION_ID/"]
+}

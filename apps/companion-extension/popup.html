@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ScreenMesh Companion</title>
+    <style>
+      body { width: 280px; margin: 0; padding: 16px; font: 13px/1.45 system-ui, sans-serif; color: #191919; }
+      h1 { margin: 0 0 8px; font-size: 15px; }
+      p { margin: 0 0 12px; color: #666; }
+      code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #444; }
+      button { width: 100%; border: 0; border-radius: 6px; padding: 9px 12px; background: #171717; color: #fff; font: inherit; cursor: pointer; }
+      #status { margin-top: 10px; font-size: 12px; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>ScreenMesh Local Companion</h1>
+    <p>Allow only this site to request local network-route names and IPv4 addresses.</p>
+    <code id="site">Checking current tab…</code>
+    <button id="connect" type="button">Connect this ScreenMesh site</button>
+    <div id="status" role="status"></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

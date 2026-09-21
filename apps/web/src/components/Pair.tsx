@@ -12,6 +12,7 @@ import {
 import { Button } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { LockIcon } from "./mesh-icons.js";
+import { companionRouteLabel, requestCompanionRoutes, type CompanionRoute } from "../lib/companion.js";
 
 /**
  * Presentation-only masking of the join link: the real, fully-functional
@@ -48,6 +49,9 @@ export function PairPanel(props: {
   const isOwner = props.me.deviceId === props.workspace.ownerDeviceId;
   const [pairing, setPairing] = useState<PairingPayload | null>(props.initialPairing);
   const [candidates, setCandidates] = useState<LanCandidate[]>([]);
+  const [companionRoutes, setCompanionRoutes] = useState<CompanionRoute[]>([]);
+  const [selectedCompanionRoute, setSelectedCompanionRoute] = useState("");
+  const [companionChecked, setCompanionChecked] = useState(false);
   const [selectedOrigin, setSelectedOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +78,28 @@ export function PairPanel(props: {
       })
       .catch(() => {});
     if (!pairing) void regenerate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function refreshCompanionRoutes(): Promise<void> {
+    try {
+      const routes = await requestCompanionRoutes();
+      setCompanionRoutes(routes);
+      setSelectedCompanionRoute((selected) => {
+        if (routes.some((route) => route.address === selected)) return selected;
+        return routes.find((route) => route.recommended)?.address ?? routes[0]?.address ?? "";
+      });
+    } catch {
+      // The companion is optional. A missing extension/agent must not change
+      // normal relay pairing or surface a distracting error.
+      setCompanionRoutes([]);
+    } finally {
+      setCompanionChecked(true);
+    }
+  }
+
+  useEffect(() => {
+    void refreshCompanionRoutes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -178,6 +204,46 @@ export function PairPanel(props: {
             </div>
           )}
 
+          <div className="rounded-lg border border-border bg-muted/35 p-3">
+            <div className="mb-2.5 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium">Local companion routes</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {companionRoutes.length > 0
+                    ? "Choose the route to use when local pairing becomes available."
+                    : companionChecked
+                      ? "No local companion is connected. Relay pairing will be used."
+                      : "Checking for the optional local companion…"}
+                </p>
+              </div>
+              <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2 text-[11px]" onClick={() => void refreshCompanionRoutes()}>
+                Refresh
+              </Button>
+            </div>
+            {companionRoutes.length > 0 && (
+              <>
+                <SelectMenu
+                  ariaLabel="Local companion route"
+                  value={selectedCompanionRoute}
+                  onValueChange={setSelectedCompanionRoute}
+                  options={companionRoutes.map((route) => ({
+                    value: route.address,
+                    label: `${companionRouteLabel(route)}${route.recommended ? " — Recommended" : ""}`,
+                    description: route.address,
+                  }))}
+                />
+                {companionRoutes.find((route) => route.address === selectedCompanionRoute)?.kind === "vpn" && (
+                  <p className="mt-2 text-[11px] text-warning">VPN selected. Only use it when the receiving device can reach that VPN.</p>
+                )}
+                {companionRoutes.find((route) => route.address === selectedCompanionRoute)?.kind === "virtual" && (
+                  <p className="mt-2 text-[11px] text-warning">Virtual adapter selected. It is usually not reachable from a phone.</p>
+                )}
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  This is a route preference only. The current QR remains relay-backed until the companion can host a secure LAN listener.
+                </p>
+              </>
+            )}
+          </div>
           <div className="border-t border-border pt-3">
             <Button size="sm" variant="outline" onClick={() => void regenerate()}>
               Generate a new code
