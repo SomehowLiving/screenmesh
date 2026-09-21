@@ -55,9 +55,32 @@ Messaging connection while it is active. The native companion:
 - requires an explicit browser confirmation before a VPN or virtual route is
   enabled; it never falls through to another adapter.
 
-The local listener currently establishes the authenticated, pinned-TLS
-bootstrap only. It does not accept application data, decrypt payloads, or
-replace the relay/WebRTC transport.
+## LAN companion direct transport (implemented)
+
+After Android has verified the SM2 certificate pin and consumed its one-use
+session token, it keeps that TLS connection open as `LanCompanionDirect`.
+The desktop PWA engine and Android engine then use it before WebRTC and the
+encrypted relay:
+
+```text
+PWA MeshEngine -- encrypted SecureEnvelope bytes --> extension/native host
+  --> selected-interface companion TLS socket --> Android MeshEngine
+
+Android MeshEngine -- encrypted SecureEnvelope bytes --> same TLS socket
+  --> companion native event --> extension --> PWA MeshEngine
+```
+
+The companion sees framing metadata and opaque serialized envelope bytes only;
+it does not decrypt workspace content, retain messages, or invent a second
+application protocol. The listener associates the socket with the Android
+device ID sent in its authenticated hello and refuses a desktop envelope whose
+recipient ID does not match that identity. Existing envelope signatures,
+ratchet encryption, message-ID duplicate suppression, acknowledgements, and
+outbox behavior remain the authority for correctness.
+
+If the TLS socket, extension, or native host fails, direct delivery returns
+false and `MeshEngine` immediately uses its existing WebRTC then encrypted
+relay fallback. A queued outbox item is retried when a route opens.
 
 ## SM2 local-pairing invitation (implemented)
 
@@ -74,31 +97,23 @@ pin mismatch. A mobile-browser PWA parses SM2 but continues directly to the
 normal relay join because public HTTPS pages cannot reliably connect to a
 self-signed private LAN endpoint.
 
-## Deliberately not implemented yet: LAN data transport
+## Browser boundary
 
-Listing an address is not enough to make it safe or usable as a QR target. For
-example, advertising `192.168.1.42` requires a secure local ScreenMesh service
-that a phone can actually reach. A hosted HTTPS PWA cannot safely switch its
-API/WebSocket traffic to an unauthenticated `http://192.168.x.x` endpoint: that
-would encounter browser mixed-content and Private Network Access protections.
-
-The next phase is `LanCompanionDirect`: forward opaque, already-encrypted
-`SecureEnvelope` bytes over the authenticated TLS connection and introduce it
-to the transport negotiator before WebRTC and relay. It must retain duplicate
-suppression, acknowledgements, queueing, and safe fallback behavior.
+The hosted PWA never opens a browser network socket to `192.168.x.x`; that
+would be subject to mixed-content, certificate, CORS, and Private Network
+Access restrictions. Its narrow extension/native bridge sends opaque envelope
+bytes to the local companion instead. Mobile-browser PWA joins continue to use
+WebRTC/relay; the supported LAN client in this phase is Android native.
 
 ## Remaining implementation phases
 
-1. **LAN data transport:** Android and the companion exchange opaque envelope
-   frames after SM2 bootstrap; wire it into `MeshEngine` as
-   `LanCompanionDirect`, ahead of WebRTC and encrypted relay.
-2. **Negotiation and resilience:** route health checks, relay/WebRTC fallback,
+1. **Negotiation and resilience:** route health checks, relay/WebRTC fallback,
    reconnect rules, duplicate-delivery tests, firewall/incorrect-route UX, and
    a visible active-route state.
-3. **Release packaging:** package and sign the companion, register a native
+2. **Release packaging:** package and sign the companion, register a native
    host manifest with the published extension ID, and add installer/removal
    cleanup for the listener/firewall state.
-4. **Real-device validation:** test Android-to-desktop on Wi-Fi, Ethernet,
+3. **Real-device validation:** test Android-to-desktop on Wi-Fi, Ethernet,
    VPN, guest Wi-Fi isolation, firewall denial, expired/replayed QR, and
    extension/service-worker restarts. Keep the mobile PWA on WebRTC/relay
    unless a managed trusted-LAN HTTPS model is introduced.

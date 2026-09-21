@@ -82,7 +82,7 @@ function applyTextDiff(ytext: Y.Text, next: string): void {
 /** An optional direct (peer-to-peer) byte channel, e.g. WebRTC. */
 export interface DirectChannel {
   /** Returns true if the bytes were handed to an OPEN direct channel. */
-  trySend(peerId: string, data: Uint8Array): boolean;
+  trySend(peerId: string, data: Uint8Array): boolean | Promise<boolean>;
   onMessage(handler: (data: Uint8Array) => void): void;
 }
 
@@ -674,7 +674,7 @@ export class MeshEngine {
   private async deliverBytes(recipientId: string, bytes: Uint8Array): Promise<boolean> {
     if (this.cfg.direct) {
       try {
-        if (this.cfg.direct.trySend(recipientId, bytes)) return true;
+        if (await this.cfg.direct.trySend(recipientId, bytes)) return true;
       } catch {
         // fall through to the relay
       }
@@ -731,7 +731,7 @@ export class MeshEngine {
   private async forwardCarriedBytes(recipientId: string, bytes: Uint8Array): Promise<boolean> {
     if (this.cfg.direct) {
       try {
-        if (this.cfg.direct.trySend(recipientId, bytes)) return true;
+        if (await this.cfg.direct.trySend(recipientId, bytes)) return true;
       } catch {
         // fall through to the relay
       }

@@ -29,6 +29,7 @@ import {
 import type { ScreenMeshDb } from "@screenmesh/storage";
 import { MeshEngine } from "@screenmesh/sync";
 import { WebRtcDirect, WebSocketRelayTransport } from "@screenmesh/transport";
+import { onCompanionLanConnected, onCompanionLanEnvelope, sendCompanionLanEnvelope } from "./companion.js";
 
 export interface LocalIdentity {
   deviceId: string;
@@ -456,6 +457,16 @@ export function buildEngine(
   const direct = WebRtcDirect.available()
     ? new WebRtcDirect(transport, me.deviceId)
     : undefined;
+  // The companion only advertises a peer after that Android identity has
+  // consumed the QR-pinned one-use TLS session. It is deliberately tried
+  // before WebRTC; any native failure falls through synchronously to WebRTC
+  // and then the encrypted relay in MeshEngine.
+  const lanPeers = new Set<string>();
+  const lanHandlers: Array<(data: Uint8Array) => void> = [];
+  onCompanionLanConnected((deviceId) => lanPeers.add(deviceId));
+  onCompanionLanEnvelope((_sourceDeviceId, data) => {
+    for (const handler of lanHandlers) handler(data);
+  });
   const engine = new MeshEngine({
     db,
     identity,
@@ -463,14 +474,23 @@ export function buildEngine(
     workspaceKey,
     ownerDeviceId: workspace.ownerDeviceId,
     transport,
-    ...(direct
-      ? {
-          direct: {
-            trySend: (peerId: string, data: Uint8Array) => direct.trySend(peerId, data),
-            onMessage: (handler: (data: Uint8Array) => void) => direct.onMessage(handler),
-          },
-        }
-      : {}),
+    direct: {
+            trySend: async (peerId: string, data: Uint8Array) => {
+              if (lanPeers.has(peerId)) {
+                try {
+                  if (await sendCompanionLanEnvelope(peerId, data)) return true;
+                  lanPeers.delete(peerId);
+                } catch {
+                  lanPeers.delete(peerId);
+                }
+              }
+              return direct?.trySend(peerId, data) ?? false;
+            },
+            onMessage: (handler: (data: Uint8Array) => void) => {
+              lanHandlers.push(handler);
+              direct?.onMessage(handler);
+            },
+    },
   });
   return { engine, transport };
 }

@@ -107,6 +107,12 @@ private const val FILE_CHUNK_SIZE_B64 = 200_000
 /** A newly-arrived hand-off request — mirrors the TS engine's `settings["focusObject"]` write. */
 data class FocusRequest(val objectId: String, val fromDeviceId: String, val at: Long)
 
+interface DirectChannel {
+    fun trySend(peerId: String, data: ByteArray): Boolean
+    fun onMessage(handler: (ByteArray) -> Unit)
+    fun close()
+}
+
 @Serializable
 private data class OpsEnvelope(val ops: List<Operation>)
 
@@ -139,6 +145,7 @@ data class EngineConfig(
     /** Only this device may revoke devices. */
     val ownerDeviceId: String,
     val transport: RelayTransport,
+    val direct: DirectChannel? = null,
     val now: () -> Long = { System.currentTimeMillis() },
     /** Override the periodic sweep cadence (tests may want a short interval). */
     val sweepIntervalMs: Long = DEFAULT_SWEEP_INTERVAL_MS,
@@ -196,6 +203,9 @@ class MeshEngine(private val cfg: EngineConfig) {
                 e.printStackTrace()
             }
         }
+        cfg.direct?.onMessage { data ->
+            try { handleIncoming(data) } catch (e: Exception) { e.printStackTrace() }
+        }
         cfg.transport.subscribePresence { entries -> applyPresence(entries) }
         cfg.transport.onStatusChange { status -> if (status == TransportStatus.CONNECTED) drainOutbox() }
         cfg.transport.open()
@@ -211,6 +221,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         sweepExecutor?.shutdown()
         sweepExecutor = null
         cfg.transport.disconnect()
+        cfg.direct?.close()
     }
 
     /** Create an object locally and send it to each recipient device. */
@@ -589,7 +600,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         )
         val bytes = Json.encodeToString(EnvelopeJson.serializer(), envelope.toJson()).toByteArray(StandardCharsets.UTF_8)
 
-        if (deliverBytes(bytes)) return true
+        if (deliverBytes(recipientId, bytes)) return true
 
         outbox[envelope.messageId] = OutboxEntry(
             bundleId = envelope.messageId,
@@ -606,7 +617,12 @@ class MeshEngine(private val cfg: EngineConfig) {
     }
 
     /** Delivers over the relay if connected. Returns false if not — caller queues for later. */
-    private fun deliverBytes(bytes: ByteArray): Boolean {
+    private fun deliverBytes(recipientId: String, bytes: ByteArray): Boolean {
+        try {
+            if (cfg.direct?.trySend(recipientId, bytes) == true) return true
+        } catch (_: Exception) {
+            // A failed direct route must never prevent relay fallback.
+        }
         if (!cfg.transport.isConnected) return false
         return try {
             val json = Json.decodeFromString(EnvelopeJson.serializer(), String(bytes, StandardCharsets.UTF_8))
@@ -624,7 +640,12 @@ class MeshEngine(private val cfg: EngineConfig) {
      * senderDeviceId doesn't match our own authenticated connection, which
      * is exactly true here (we're relaying, not sending our own).
      */
-    private fun forwardCarriedBytes(bytes: ByteArray): Boolean {
+    private fun forwardCarriedBytes(recipientId: String, bytes: ByteArray): Boolean {
+        try {
+            if (cfg.direct?.trySend(recipientId, bytes) == true) return true
+        } catch (_: Exception) {
+            // fall through to relay forwarding
+        }
         if (!cfg.transport.isConnected) return false
         return try {
             val json = Json.decodeFromString(EnvelopeJson.serializer(), String(bytes, StandardCharsets.UTF_8))
@@ -639,7 +660,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         val nowMs = now()
         outbox.values.filter { it.expiresAt < nowMs }.forEach { outbox.remove(it.bundleId) }
         for (entry in outbox.values.toList()) {
-            if (deliverBytes(entry.encryptedPayload)) {
+            if (deliverBytes(entry.destinationDeviceId, entry.encryptedPayload)) {
                 outbox.remove(entry.bundleId)
             }
         }
@@ -658,7 +679,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         for (bundle in carried.values.toList()) {
             val dest = devices[bundle.destinationDeviceId]
             if (dest?.status != "online") continue
-            if (forwardCarriedBytes(bundle.encryptedPayload)) {
+            if (forwardCarriedBytes(bundle.destinationDeviceId, bundle.encryptedPayload)) {
                 carried.remove(bundle.bundleId)
             }
         }

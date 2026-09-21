@@ -1,6 +1,6 @@
 import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import tls from "node:tls";
-import { getLanSession, startLanSession, stopLanSession } from "../src/lan.js";
+import { getLanSession, sendLanEnvelope, setLanEnvelopeHandler, startLanSession, stopLanSession } from "../src/lan.js";
 import { listCompanionNetworkInterfaces } from "../src/companion.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -42,6 +42,7 @@ if (!route) {
 
 const sessionId = randomUUID();
 const sessionToken = randomUUID();
+const deviceId = randomUUID();
 const session = await startLanSession({
   address: route.address,
   sessionId,
@@ -60,10 +61,22 @@ try {
   const spki = new X509Certificate(certificate.raw).publicKey.export({ type: "spki", format: "der" });
   const observedPin = `sha256/${createHash("sha256").update(spki).digest("base64")}`;
   assert(observedPin === session.certificateSha256, "TLS peer certificate must match the advertised pin");
-  socket.write(`${JSON.stringify({ type: "screenmesh.lan.hello", sessionToken })}\n`);
+  socket.write(`${JSON.stringify({ type: "screenmesh.lan.hello", sessionToken, deviceId })}\n`);
   const ready = JSON.parse(await readLine(socket)) as { type?: string; sessionId?: string };
   assert(ready.type === "screenmesh.lan.ready" && ready.sessionId === sessionId, "valid one-use token must authenticate the client");
   assert(getLanSession()?.status === "connected", "successful handshake must update listener status");
+
+  const inbound = new Promise<Uint8Array>((resolve) => setLanEnvelopeHandler((_source, data) => resolve(data)));
+  const fromPhone = new TextEncoder().encode('{"opaque":"android-envelope"}');
+  socket.write(`${JSON.stringify({ type: "screenmesh.lan.envelope", envelopeB64: Buffer.from(fromPhone).toString("base64") })}\n`);
+  assert(new TextDecoder().decode(await inbound) === new TextDecoder().decode(fromPhone), "companion must emit opaque Android envelope bytes");
+
+  const toPhone = new TextEncoder().encode('{"opaque":"desktop-envelope"}');
+  const outbound = readLine(socket).then((line) => JSON.parse(line) as { type?: string; envelopeB64?: string });
+  assert(sendLanEnvelope(deviceId, toPhone), "companion must target only the authenticated Android identity");
+  const frame = await outbound;
+  assert(frame.type === "screenmesh.lan.envelope" && frame.envelopeB64 === Buffer.from(toPhone).toString("base64"), "companion must forward opaque desktop envelope bytes");
+  assert(!sendLanEnvelope(randomUUID(), toPhone), "companion must reject a different recipient identity");
   socket.destroy();
 
   const replay = await connect(session.address, session.port);
@@ -75,6 +88,7 @@ try {
   });
   assert(replayClosed, "a consumed session token must not be accepted again");
 } finally {
+  setLanEnvelopeHandler(null);
   await stopLanSession(sessionId);
 }
 

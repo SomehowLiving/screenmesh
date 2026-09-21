@@ -1,6 +1,6 @@
 import os from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { getLanSession, startLanSession, stopLanSession, type LanSessionInfo } from "./lan.js";
+import { getLanSession, sendLanEnvelope, setLanConnectedDeviceHandler, setLanEnvelopeHandler, startLanSession, stopLanSession, type LanSessionInfo } from "./lan.js";
 
 /** A non-sensitive description of a local route, intentionally excluding MAC and IPv6 addresses. */
 export interface CompanionNetworkInterface {
@@ -15,13 +15,19 @@ export type CompanionRequest =
   | { type: "screenmesh.listNetworkInterfaces" }
   | { type: "screenmesh.startLanSession"; address: string; sessionId: string; sessionToken: string; expiresAt: number; allowUnsafeRoute?: boolean }
   | { type: "screenmesh.stopLanSession"; sessionId?: string }
-  | { type: "screenmesh.getLanSession" };
+  | { type: "screenmesh.getLanSession" }
+  | { type: "screenmesh.sendLanEnvelope"; recipientDeviceId: string; envelopeB64: string };
 
 export type CompanionResponse =
   | { ok: true; interfaces: CompanionNetworkInterface[] }
   | { ok: true; session: LanSessionInfo | null }
   | { ok: true; stopped: boolean }
+  | { ok: true; sent: boolean }
   | { ok: false; error: string };
+
+export type CompanionEvent =
+  | { type: "screenmesh.lan.envelope"; sourceDeviceId: string; envelopeB64: string }
+  | { type: "screenmesh.lan.connected"; deviceId: string };
 
 const VPN_NAME_PATTERN = /vpn|pritunl|tailscale|zerotier|wireguard|openvpn|nordlynx|tap|tun\d|ppp|utun/i;
 const VIRTUAL_NAME_PATTERN = /virtual|vethernet|hyper-v|wsl|docker|loopback|vmware|vbox/i;
@@ -81,6 +87,12 @@ export async function handleCompanionRequest(message: unknown): Promise<Companio
         return { ok: true, session: getLanSession() };
       case "screenmesh.stopLanSession":
         return { ok: true, stopped: await stopLanSession(request.sessionId) };
+      case "screenmesh.sendLanEnvelope": {
+        if (typeof request.recipientDeviceId !== "string" || typeof request.envelopeB64 !== "string") return { ok: false, error: "Invalid LAN envelope request." };
+        const bytes = Buffer.from(request.envelopeB64, "base64");
+        if (bytes.length === 0 || bytes.length > 1024 * 1024) return { ok: false, error: "Invalid LAN envelope request." };
+        return { ok: true, sent: sendLanEnvelope(request.recipientDeviceId, bytes) };
+      }
       case "screenmesh.startLanSession":
         if (typeof request.address !== "string" || typeof request.sessionId !== "string" || typeof request.sessionToken !== "string" || typeof request.expiresAt !== "number") {
           return { ok: false, error: "Invalid LAN session request." };
@@ -100,7 +112,7 @@ export async function handleCompanionRequest(message: unknown): Promise<Companio
   }
 }
 
-function writeNativeMessage(output: Writable, message: CompanionResponse): void {
+function writeNativeMessage(output: Writable, message: CompanionResponse | CompanionEvent): void {
   const body = Buffer.from(JSON.stringify(message), "utf8");
   const header = Buffer.allocUnsafe(4);
   header.writeUInt32LE(body.length, 0);
@@ -114,6 +126,14 @@ function writeNativeMessage(output: Writable, message: CompanionResponse): void 
 export function startCompanionNativeHost(input: Readable, output: Writable): void {
   let buffered = Buffer.alloc(0);
   let queued = Promise.resolve();
+  setLanEnvelopeHandler((sourceDeviceId, data) => {
+    writeNativeMessage(output, {
+      type: "screenmesh.lan.envelope",
+      sourceDeviceId,
+      envelopeB64: Buffer.from(data).toString("base64"),
+    });
+  });
+  setLanConnectedDeviceHandler((deviceId) => writeNativeMessage(output, { type: "screenmesh.lan.connected", deviceId }));
   input.on("data", (chunk: Buffer) => {
     buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
     queued = queued.then(async () => {
@@ -137,5 +157,9 @@ export function startCompanionNativeHost(input: Readable, output: Writable): voi
   });
   // The listener exists only while an approved extension holds this native
   // connection. Do not leave a LAN port behind if Chrome disconnects it.
-  input.once("end", () => { void stopLanSession(); });
+  input.once("end", () => {
+    setLanEnvelopeHandler(null);
+    setLanConnectedDeviceHandler(null);
+    void stopLanSession();
+  });
 }

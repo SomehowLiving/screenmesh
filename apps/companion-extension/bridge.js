@@ -11,3 +11,8 @@ window.addEventListener("screenmesh-companion-request", (event) => {
     }));
   });
 });
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "screenmesh.companionEvent" || !String(message.event?.type).startsWith("screenmesh.lan.")) return;
+  window.dispatchEvent(new CustomEvent("screenmesh-companion-event", { detail: message.event }));
+});

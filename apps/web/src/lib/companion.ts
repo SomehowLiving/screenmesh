@@ -1,3 +1,5 @@
+import { fromBase64, toBase64 } from "@screenmesh/protocol";
+
 /**
  * Browser-facing half of the optional Local Companion bridge.
  *
@@ -43,7 +45,8 @@ type CompanionRequest =
   | { type: "screenmesh.listNetworkInterfaces" }
   | { type: "screenmesh.startLanSession"; address: string; sessionId: string; sessionToken: string; expiresAt: number; allowUnsafeRoute?: boolean }
   | { type: "screenmesh.stopLanSession"; sessionId?: string }
-  | { type: "screenmesh.getLanSession" };
+  | { type: "screenmesh.getLanSession" }
+  | { type: "screenmesh.sendLanEnvelope"; recipientDeviceId: string; envelopeB64: string };
 
 function requestCompanion(request: CompanionRequest, timeoutMs = 3_000): Promise<CompanionResponse> {
   return new Promise((resolve, reject) => {
@@ -106,4 +109,40 @@ export async function getCompanionLanSession(): Promise<CompanionLanSession | nu
   const response = await requestCompanion({ type: "screenmesh.getLanSession" });
   if (!("session" in response)) throw new Error("Companion returned an invalid session response.");
   return response.session;
+}
+
+/** True only when the connected Android identity owns this listener session. */
+export async function sendCompanionLanEnvelope(recipientDeviceId: string, data: Uint8Array): Promise<boolean> {
+  const response = await requestCompanion({
+    type: "screenmesh.sendLanEnvelope",
+    recipientDeviceId,
+    envelopeB64: toBase64(data),
+  });
+  return "sent" in response && response.sent === true;
+}
+
+/** Receives opaque envelope bytes pushed from the native companion. */
+export function onCompanionLanEnvelope(handler: (sourceDeviceId: string, data: Uint8Array) => void): () => void {
+  const listener = (event: Event) => {
+    const detail = (event as CustomEvent<{ type?: unknown; sourceDeviceId?: unknown; envelopeB64?: unknown }>).detail;
+    if (detail?.type !== "screenmesh.lan.envelope" || typeof detail.sourceDeviceId !== "string" || typeof detail.envelopeB64 !== "string") return;
+    try {
+      const data = fromBase64(detail.envelopeB64);
+      if (data.length > 0 && data.length <= 1024 * 1024) handler(detail.sourceDeviceId, data);
+    } catch {
+      // Malformed opaque data is discarded before it reaches the engine.
+    }
+  };
+  window.addEventListener("screenmesh-companion-event", listener);
+  return () => window.removeEventListener("screenmesh-companion-event", listener);
+}
+
+/** Announces the Android identity that consumed the current one-use session. */
+export function onCompanionLanConnected(handler: (deviceId: string) => void): () => void {
+  const listener = (event: Event) => {
+    const detail = (event as CustomEvent<{ type?: unknown; deviceId?: unknown }>).detail;
+    if (detail?.type === "screenmesh.lan.connected" && typeof detail.deviceId === "string") handler(detail.deviceId);
+  };
+  window.addEventListener("screenmesh-companion-event", listener);
+  return () => window.removeEventListener("screenmesh-companion-event", listener);
 }

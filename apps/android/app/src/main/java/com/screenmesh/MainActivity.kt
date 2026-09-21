@@ -27,6 +27,7 @@ import com.screenmesh.crypto.importWorkspaceKey
 import com.screenmesh.protocol.MeshObjectTypes
 import com.screenmesh.sync.AppState
 import com.screenmesh.sync.EngineConfig
+import com.screenmesh.sync.DirectChannel
 import com.screenmesh.sync.LocalEngineStateStore
 import com.screenmesh.sync.LocalStateStore
 import com.screenmesh.sync.MeshEngine
@@ -200,16 +201,15 @@ class MainActivity : AppCompatActivity() {
         background.execute {
             try {
                 val payload = decodePairingPayload(code)
-                // SM2's local bootstrap is additive: a firewall, wrong route,
-                // or absent companion falls back safely to the normal signed,
-                // relay-backed one-use pairing flow. A pin mismatch never sends
-                // the LAN session token to that listener.
-                val localBootstrapReady = payload.lanEndpoint?.let {
-                    runCatching { verifyLanCompanionBootstrap(it) }.isSuccess
-                } ?: false
                 val identity = generateIdentity()
                 val joined = joinWorkspaceHttp(serverUrl, payload.workspaceId, payload.pairingToken, identity, deviceName)
                 val workspaceKey = importWorkspaceKey(payload.workspaceKey)
+                // The Android device identity is now known and relay-registered.
+                // The pinned LAN bootstrap is additive: any failure leaves the
+                // signed relay route available and never bypasses its checks.
+                val localDirect = payload.lanEndpoint?.let {
+                    runCatching { verifyLanCompanionBootstrap(it, identity.deviceId, joined.workspace.ownerDeviceId) }.getOrNull()
+                }
 
                 localState.save(
                     AppState(
@@ -221,9 +221,9 @@ class MainActivity : AppCompatActivity() {
                         workspaceKeyB64 = exportWorkspaceKey(workspaceKey),
                     ),
                 )
-                startEngine(identity, serverUrl, joined.workspace.id, joined.workspace.ownerDeviceId, workspaceKey, payload.workspaceKey)
+                startEngine(identity, serverUrl, joined.workspace.id, joined.workspace.ownerDeviceId, workspaceKey, payload.workspaceKey, localDirect)
                 runOnUiThread {
-                    val route = if (payload.lanEndpoint != null && !localBootstrapReady) " (local listener unavailable; relay fallback)" else ""
+                    val route = if (payload.lanEndpoint != null && localDirect == null) " (local listener unavailable; relay fallback)" else if (localDirect != null) " (local companion connected)" else ""
                     setStatus("Joined \"${joined.workspace.name}\" as $deviceName$route")
                 }
             } catch (e: Exception) {
@@ -240,6 +240,7 @@ class MainActivity : AppCompatActivity() {
         ownerDeviceId: String,
         workspaceKey: SecretKey,
         workspaceKeyB64: String,
+        direct: DirectChannel? = null,
     ) {
         val relayWsUrl = Regex("^http").replaceFirst(serverUrl, "ws") + "/relay"
         val auth = object : RelayAuth {
@@ -255,6 +256,7 @@ class MainActivity : AppCompatActivity() {
                 workspaceKey = workspaceKey,
                 ownerDeviceId = ownerDeviceId,
                 transport = transport,
+                direct = direct,
                 onObjectReceived = { obj, senderId ->
                     appendLog("Received from $senderId: ${obj.content}")
                 },

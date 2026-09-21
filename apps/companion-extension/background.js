@@ -5,6 +5,7 @@ const ALLOWED_COMPANION_REQUESTS = new Set([
   "screenmesh.startLanSession",
   "screenmesh.stopLanSession",
   "screenmesh.getLanSession",
+  "screenmesh.sendLanEnvelope",
 ]);
 let nativePort = null;
 let activeNativeRequest = null;
@@ -20,6 +21,17 @@ async function trustedOrigin() {
   return typeof origin === "string" ? origin : null;
 }
 
+async function broadcastLanEnvelope(event) {
+  const origin = await trustedOrigin();
+  if (!origin) return;
+  const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+  for (const tab of tabs) {
+    if (typeof tab.id === "number") {
+      chrome.tabs.sendMessage(tab.id, { type: "screenmesh.companionEvent", event }).catch(() => {});
+    }
+  }
+}
+
 /**
  * `sendNativeMessage` tears down the native host after one reply. LAN
  * listeners need a persistent host, so requests are serialized over a
@@ -31,6 +43,10 @@ function pumpNativeRequests() {
     try {
       nativePort = chrome.runtime.connectNative(HOST_NAME);
       nativePort.onMessage.addListener((response) => {
+        if (response?.type === "screenmesh.lan.envelope" || response?.type === "screenmesh.lan.connected") {
+          void broadcastLanEnvelope(response);
+          return;
+        }
         const request = activeNativeRequest;
         activeNativeRequest = null;
         request?.resolve(response ?? { ok: false, error: "Companion did not respond." });
