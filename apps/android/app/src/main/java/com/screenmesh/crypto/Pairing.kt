@@ -2,6 +2,7 @@ package com.screenmesh.crypto
 
 import com.screenmesh.protocol.PairingPayload
 import com.screenmesh.protocol.LanPairingEndpoint
+import java.net.URLDecoder
 import java.security.SecureRandom
 
 /**
@@ -86,8 +87,23 @@ fun encodePairingPayload(payload: PairingPayload): String {
     ).joinToString(".")
 }
 
+/**
+ * Accepts a full join URL (what PairPanel's "Copy" button actually puts on
+ * the clipboard — `<origin>/#join=<code>`) or a raw pairing code — mirrors
+ * apps/web/src/lib/app.ts's parseJoinInput. Without this, pasting the
+ * clipboard content straight into "Pairing code" always failed with
+ * "invalid pairing code" since it never starts with "SM1"/"SM2".
+ */
 fun decodePairingPayload(encoded: String): PairingPayload {
-    val parts = encoded.trim().split(".")
+    var code = encoded.trim()
+    val marker = code.indexOf("#join=")
+    if (marker >= 0) code = code.substring(marker + 6)
+    code = try {
+        URLDecoder.decode(code.replace("+", "%2B"), "UTF-8")
+    } catch (_: Exception) {
+        code
+    }
+    val parts = code.split(".")
     if (parts.firstOrNull() == SM1_PREFIX && parts.size == 5) {
         val (_, workspaceId, pairingToken, keyUrlSafe, expiresAt36) = parts
         if (workspaceId.isEmpty() || pairingToken.isEmpty() || keyUrlSafe.isEmpty() || expiresAt36.isEmpty()) {

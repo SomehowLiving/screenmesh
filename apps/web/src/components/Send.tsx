@@ -34,6 +34,46 @@ const CAPABILITY_CHOICES: DeviceCapability[] = [
  */
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Browsers guess MIME type from OS file-association tables, which are wrong
+ * or plain absent for common source/text extensions — e.g. ".ts" resolves to
+ * a video MIME type (MPEG transport stream) on some systems since TypeScript
+ * never enters the OS's association table at all. These extensions get an
+ * authoritative override instead of trusting that guess.
+ */
+const EXTENSION_MIME_OVERRIDES: Record<string, string> = {
+  ts: "text/typescript",
+  tsx: "text/tsx",
+  js: "text/javascript",
+  jsx: "text/jsx",
+  mjs: "text/javascript",
+  cjs: "text/javascript",
+  py: "text/x-python",
+  rs: "text/rust",
+  go: "text/x-go",
+  rb: "text/x-ruby",
+  kt: "text/x-kotlin",
+  swift: "text/x-swift",
+  c: "text/x-c",
+  cpp: "text/x-c++",
+  h: "text/x-c",
+  cs: "text/x-csharp",
+  sh: "text/x-sh",
+  sql: "text/x-sql",
+  json: "application/json",
+  yaml: "text/yaml",
+  yml: "text/yaml",
+  md: "text/markdown",
+  css: "text/css",
+  html: "text/html",
+  xml: "text/xml",
+};
+
+function resolvedMimeType(name: string, browserType: string): string {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  return EXTENSION_MIME_OVERRIDES[extension] ?? browserType ?? "application/octet-stream";
+}
+
 const EXPIRY_CHOICES: Array<{ label: string; ms?: number }> = [
   { label: "Never expires" },
   { label: "Expires in 10 minutes", ms: 10 * 60 * 1000 },
@@ -200,7 +240,7 @@ export function SendPanel(props: {
     const bytes = new Uint8Array(await picked.arrayBuffer());
     setFile({
       name: picked.name,
-      mimeType: picked.type || "application/octet-stream",
+      mimeType: resolvedMimeType(picked.name, picked.type),
       size: picked.size,
       dataB64: toBase64(bytes),
     });

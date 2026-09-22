@@ -63,6 +63,20 @@ function hasMarkdownStructure(text: string): boolean {
   );
 }
 
+// Prose-only structure — everything hasMarkdownStructure checks EXCEPT a code
+// fence. A lone ```fenced block``` with nothing else is just a code snippet,
+// not a formatted document; only genuine prose markers (a heading, quote,
+// table, bold text, or link) should promote something to "document" ahead of
+// the plain "this looks like code" signal.
+function hasProseMarkdownStructure(text: string): boolean {
+  return (
+    HEADING_PATTERN.test(text) ||
+    BLOCKQUOTE_PATTERN.test(text) ||
+    TABLE_ROW_PATTERN.test(text) ||
+    BOLD_OR_LINK_PATTERN.test(text)
+  );
+}
+
 function looksLikeJson(text: string): boolean {
   if (!/^[[{]/.test(text) || !/[\]}]$/.test(text)) return false;
   try {
@@ -110,7 +124,6 @@ export function detectContent(text: string): ContentDetection {
   const entities: ContentEntities = { urls, emails: emailsIn(trimmed), ips: ipsIn(trimmed) };
 
   const json = looksLikeJson(trimmed);
-  const markdown = hasMarkdownStructure(trimmed);
   const checklist = looksLikeChecklist(trimmed);
   const code = json || looksLikeCode(trimmed);
   const document = looksLikeDocument(trimmed);
@@ -125,8 +138,10 @@ export function detectContent(text: string): ContentDetection {
   // Priority: a formatted markdown/JSON document wins over a bare "contains a
   // link/bullet" signal, so a doc full of headings and links isn't reduced to a
   // Link or Checklist object. A short message that's basically just a URL still
-  // becomes a Link. Explicit checklists beat a generic code/document guess.
-  if (document && (markdown || json)) return { primaryType: "document", facets, label: "Document", urls, entities };
+  // becomes a Link. Explicit checklists beat a generic code/document guess. Only
+  // PROSE structure (heading/quote/table/bold/link) earns that priority — a bare
+  // fenced code block with nothing else is a code snippet, not a "document".
+  if (document && (hasProseMarkdownStructure(trimmed) || json)) return { primaryType: "document", facets, label: "Document", urls, entities };
   if (checklist) return { primaryType: "checklist", facets, label: "Checklist", urls, entities };
   if (urls.length) return { primaryType: "link", facets, label: "Link", urls, entities };
   if (code) return { primaryType: "code", facets, label: json ? "JSON" : "Code snippet", urls, entities };
