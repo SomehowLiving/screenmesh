@@ -29,12 +29,17 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +52,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -57,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.screenmesh.protocol.Device
+import com.screenmesh.protocol.DeviceCapabilities
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +91,12 @@ fun ScreenMeshApp(state: ScreenMeshUiState, actions: ScreenMeshActions) {
                         onClick = { state.screen = Screen.Workspace },
                         icon = { Icon(Icons.Filled.Forum, contentDescription = null) },
                         label = { Text("Workspace") },
+                    )
+                    NavigationBarItem(
+                        selected = state.screen == Screen.Feed,
+                        onClick = { state.screen = Screen.Feed },
+                        icon = { Icon(Icons.Filled.Inbox, contentDescription = null) },
+                        label = { Text("Library") },
                     )
                     NavigationBarItem(
                         selected = state.screen == Screen.Devices,
@@ -112,6 +129,20 @@ fun ScreenMeshApp(state: ScreenMeshUiState, actions: ScreenMeshActions) {
             when (state.screen) {
                 Screen.Onboarding -> OnboardingScreen(state, actions)
                 Screen.Workspace -> WorkspaceScreen(state, actions)
+                Screen.Feed -> {
+                    // Delivery status (chunk-ack progress, stall retries, expiry
+                    // sweeps) advances in the background with no push callback
+                    // into the UI, unlike devices (onDevicesChanged) or new
+                    // objects (appended straight to state) — poll while this
+                    // tab is visible so it doesn't look frozen.
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            actions.onRefreshFeed()
+                            delay(2000)
+                        }
+                    }
+                    FeedScreen(state, actions)
+                }
                 Screen.Devices -> DevicesScreen(state)
                 Screen.Pair -> PairScreen(state, actions)
             }
@@ -201,6 +232,7 @@ private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { actions.onAttachFile(it) }
     }
+    var optionsExpanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -225,31 +257,127 @@ private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions
                 }
             }
         }
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
-                Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+            TextButton(onClick = { optionsExpanded = !optionsExpanded }) {
+                Text(
+                    if (optionsExpanded) "Hide options" else "Type: ${COMPOSER_TYPES.first { it.first == state.composerType }.second}${state.targetCapability?.let { " · $it" } ?: ""}",
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
-            OutlinedTextField(
-                value = state.messageText,
-                onValueChange = { state.messageText = it },
-                placeholder = { Text("Type a note to send to everyone here…") },
-                modifier = Modifier.weight(1f),
-                minLines = 1,
-                maxLines = 4,
-            )
-            IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+            if (optionsExpanded) {
+                ComposerOptions(state)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+                }
+                OutlinedTextField(
+                    value = state.messageText,
+                    onValueChange = { state.messageText = it },
+                    placeholder = {
+                        Text(
+                            if (state.composerType == "checklist") "One checklist item per line…"
+                            else "Type a note to send here…",
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                    minLines = 1,
+                    maxLines = 4,
+                )
+                IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                }
             }
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ComposerOptions(state: ScreenMeshUiState) {
+    Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var typeMenuOpen by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = typeMenuOpen, onExpandedChange = { typeMenuOpen = it }, modifier = Modifier.weight(1f)) {
+                OutlinedTextField(
+                    value = COMPOSER_TYPES.first { it.first == state.composerType }.second,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Type") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeMenuOpen) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                )
+                ExposedDropdownMenu(expanded = typeMenuOpen, onDismissRequest = { typeMenuOpen = false }) {
+                    COMPOSER_TYPES.forEach { (value, label) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = { state.composerType = value; typeMenuOpen = false })
+                    }
+                }
+            }
+            var expiryMenuOpen by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = expiryMenuOpen, onExpandedChange = { expiryMenuOpen = it }, modifier = Modifier.weight(1f)) {
+                OutlinedTextField(
+                    value = EXPIRY_CHOICES[state.expiryIndex].first,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Expiry") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expiryMenuOpen) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                )
+                ExposedDropdownMenu(expanded = expiryMenuOpen, onDismissRequest = { expiryMenuOpen = false }) {
+                    EXPIRY_CHOICES.forEachIndexed { index, (label, _) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = { state.expiryIndex = index; expiryMenuOpen = false })
+                    }
+                }
+            }
+        }
+        var targetMenuOpen by remember { mutableStateOf(false) }
+        val targetOptions = listOf<String?>(null) + DEVICE_CAPABILITIES
+        ExposedDropdownMenuBox(expanded = targetMenuOpen, onExpandedChange = { targetMenuOpen = it }) {
+            OutlinedTextField(
+                value = state.targetCapability ?: "Everyone",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Send to") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = targetMenuOpen) },
+                modifier = Modifier.menuAnchor().fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = targetMenuOpen, onDismissRequest = { targetMenuOpen = false }) {
+                targetOptions.forEach { capability ->
+                    DropdownMenuItem(
+                        text = { Text(capability ?: "Everyone") },
+                        onClick = { state.targetCapability = capability; targetMenuOpen = false },
+                    )
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = state.deleteAfterOpening, onCheckedChange = { state.deleteAfterOpening = it })
+            Text("Delete after opening", style = MaterialTheme.typography.bodySmall)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = state.requireConfirmation, onCheckedChange = { state.requireConfirmation = it })
+            Text("Require recipient to accept", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private val DEVICE_CAPABILITIES = listOf(
+    DeviceCapabilities.TERMINAL,
+    DeviceCapabilities.FILESYSTEM,
+    DeviceCapabilities.CAMERA,
+    DeviceCapabilities.MICROPHONE,
+    DeviceCapabilities.GPS,
+    DeviceCapabilities.BROWSER,
+    DeviceCapabilities.LOCAL_MODELS,
+)
 
 @Composable
 private fun DevicesScreen(state: ScreenMeshUiState) {

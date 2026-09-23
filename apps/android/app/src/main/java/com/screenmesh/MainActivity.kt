@@ -27,8 +27,12 @@ import com.screenmesh.crypto.encodePairingPayload
 import com.screenmesh.crypto.exportWorkspaceKey
 import com.screenmesh.crypto.generateIdentity
 import com.screenmesh.crypto.importWorkspaceKey
+import com.screenmesh.protocol.ChecklistContent
+import com.screenmesh.protocol.ChecklistItem
 import com.screenmesh.protocol.FileContent
 import com.screenmesh.protocol.MeshObjectTypes
+import com.screenmesh.protocol.SendOptions
+import com.screenmesh.protocol.TextContent
 import com.screenmesh.sync.AppState
 import com.screenmesh.sync.EngineConfig
 import com.screenmesh.sync.DirectChannel
@@ -48,6 +52,7 @@ import com.screenmesh.transport.nearby.AcousticTransport
 import com.screenmesh.transport.nearby.BleTransport
 import com.screenmesh.transport.nearby.NfcPairing
 import com.screenmesh.transport.nearby.WifiDirectTransport
+import com.screenmesh.ui.EXPIRY_CHOICES
 import com.screenmesh.ui.ScreenMeshActions
 import com.screenmesh.ui.ScreenMeshApp
 import com.screenmesh.ui.ScreenMeshTheme
@@ -56,10 +61,8 @@ import com.screenmesh.ui.Screen
 import com.screenmesh.ui.encodeQrBitmap
 import com.dweekly.cyrinxhil.Role as AcousticRole
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.put
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.crypto.SecretKey
@@ -157,6 +160,12 @@ class MainActivity : ComponentActivity() {
             onMintPairCode = { onMintPairCodeClicked() },
             onCopyToClipboard = { text -> copyToClipboard(text) },
             onAttachFile = { uri -> onAttachFilePicked(uri) },
+            onRefreshFeed = { refreshFeed() },
+            onAcceptObject = { objectId -> background.execute { engine?.acceptObject(objectId); refreshFeed() } },
+            onRejectObject = { objectId -> background.execute { engine?.rejectObject(objectId); refreshFeed() } },
+            onMarkOpened = { objectId -> background.execute { engine?.markOpened(objectId); refreshFeed() } },
+            onRetryDelivery = { deliveryId -> background.execute { engine?.retryDelivery(deliveryId); refreshFeed() } },
+            onSaveFileToUri = { uri, file -> saveFileToUri(uri, file) },
         )
         setContent {
             ScreenMeshTheme {
@@ -272,6 +281,7 @@ class MainActivity : ComponentActivity() {
                 direct = direct,
                 onObjectReceived = { obj, senderId ->
                     appendLog("Received from $senderId: ${obj.content}")
+                    refreshFeed()
                 },
                 onDevicesChanged = { devices -> runOnUiThread { ui.devices = devices.filter { it.id != identity.deviceId } } },
                 stateStore = engineState,
@@ -286,8 +296,32 @@ class MainActivity : ComponentActivity() {
         currentOwnerDeviceId = ownerDeviceId
         currentWorkspaceKeyB64 = workspaceKeyB64
         newEngine.start()
-        runOnUiThread { ui.devices = newEngine.devicesSnapshot().filter { it.id != identity.deviceId } }
+        runOnUiThread {
+            ui.myDeviceId = identity.deviceId
+            ui.devices = newEngine.devicesSnapshot().filter { it.id != identity.deviceId }
+        }
+        refreshFeed()
     }
+
+    /** Pulls the engine's current objects/deliveries into UI state — see the
+     *  Feed tab's poll loop (ScreenMeshApp.kt) for why this can't just be a
+     *  one-shot push callback like onDevicesChanged/onObjectReceived. */
+    private fun refreshFeed() {
+        val currentEngine = engine ?: return
+        val objects = currentEngine.objectsSnapshot()
+        val deliveries = currentEngine.deliveriesSnapshot()
+        runOnUiThread {
+            ui.objects = objects
+            ui.deliveries = deliveries
+        }
+    }
+
+    /** Builds a "one checklist item per line" ChecklistContent — mirrors Send.tsx's checklist path. */
+    private fun checklistContentFrom(text: String): ChecklistContent =
+        ChecklistContent(
+            items = text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+                .map { line -> ChecklistItem(id = UUID.randomUUID().toString(), text = line, done = false) },
+        )
 
     private fun onSendClicked() {
         val currentEngine = engine
@@ -297,19 +331,38 @@ class MainActivity : ComponentActivity() {
         }
         val text = ui.messageText
         if (text.isEmpty()) return
+        val type = ui.composerType
+        val capability = ui.targetCapability
+        val expiresAt = EXPIRY_CHOICES.getOrNull(ui.expiryIndex)?.second?.let { System.currentTimeMillis() + it }
+        val options = SendOptions(
+            expiresAt = expiresAt,
+            deleteAfterOpening = ui.deleteAfterOpening.takeIf { it },
+            requireConfirmation = ui.requireConfirmation.takeIf { it },
+        )
         background.execute {
             try {
-                val recipients = currentEngine.devicesSnapshot().map { it.id }
+                val recipients = if (capability != null) {
+                    currentEngine.resolveCapability(capability).map { it.id }
+                } else {
+                    currentEngine.devicesSnapshot().map { it.id }
+                }
                 if (recipients.isEmpty()) {
-                    runOnUiThread { setStatus("No other devices in this workspace yet.") }
+                    runOnUiThread {
+                        setStatus(if (capability != null) "No paired device currently advertises \"$capability\"." else "No other devices in this workspace yet.")
+                    }
                     return@execute
                 }
-                val content = buildJsonObject { put("text", JsonPrimitive(text)) }
-                currentEngine.sendObject(MeshObjectTypes.TEXT, content, recipients)
+                val content = if (type == MeshObjectTypes.CHECKLIST) {
+                    Json.encodeToJsonElement(ChecklistContent.serializer(), checklistContentFrom(text))
+                } else {
+                    Json.encodeToJsonElement(TextContent.serializer(), TextContent(text))
+                }
+                currentEngine.sendObject(type, content, recipients, options)
                 runOnUiThread {
-                    appendLog("Sent: $text")
+                    appendLog("Sent ($type): $text")
                     ui.messageText = ""
                 }
+                refreshFeed()
             } catch (e: Exception) {
                 runOnUiThread { setStatus("Send failed: ${e.message}") }
             }
@@ -366,11 +419,27 @@ class MainActivity : ComponentActivity() {
                     ui.busy = false
                     appendLog("Sent ${if (objectType == MeshObjectTypes.IMAGE) "image" else "file"}: $name (${formatSize(bytes.size.toLong())})")
                 }
+                refreshFeed()
             } catch (e: Exception) {
                 runOnUiThread {
                     ui.busy = false
                     setStatus("Attach failed: ${e.message}")
                 }
+            }
+        }
+    }
+
+    /** Writes a received file/image's bytes to the location the user picked
+     *  via the system "save as" dialog (Storage Access Framework). */
+    private fun saveFileToUri(uri: Uri, file: FileContent) {
+        background.execute {
+            try {
+                val bytes = Base64.decode(file.dataB64, Base64.NO_WRAP)
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: throw IllegalStateException("Could not open the chosen location for writing")
+                runOnUiThread { setStatus("Saved ${file.name}.") }
+            } catch (e: Exception) {
+                runOnUiThread { setStatus("Save failed: ${e.message}") }
             }
         }
     }
@@ -393,6 +462,9 @@ class MainActivity : ComponentActivity() {
         ui.pairingCodeField = ""
         ui.logLines = emptyList()
         ui.devices = emptyList()
+        ui.objects = emptyList()
+        ui.deliveries = emptyList()
+        ui.myDeviceId = ""
         ui.workspaceLabel = null
         ui.mintedCode = null
         ui.mintedQr = null

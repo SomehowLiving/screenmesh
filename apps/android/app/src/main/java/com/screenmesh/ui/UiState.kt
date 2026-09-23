@@ -5,9 +5,32 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import com.screenmesh.protocol.Delivery
 import com.screenmesh.protocol.Device
+import com.screenmesh.protocol.FileContent
+import com.screenmesh.protocol.MeshObject
+import com.screenmesh.protocol.MeshObjectTypes
 
-enum class Screen { Onboarding, Workspace, Devices, Pair }
+enum class Screen { Onboarding, Workspace, Feed, Devices, Pair }
+
+/** Composer type choices exposed in the UI — mirrors Send.tsx's TYPE_CHOICES,
+ *  minus "document"/"agent_task" (document needs Yjs, not ported here; agent_task
+ *  has no UI form yet either side of this pass). */
+val COMPOSER_TYPES = listOf(
+    MeshObjectTypes.TEXT to "Text",
+    MeshObjectTypes.LINK to "Link",
+    MeshObjectTypes.CODE to "Code snippet",
+    MeshObjectTypes.CHECKLIST to "Checklist (one item per line)",
+    MeshObjectTypes.COMMAND to "Command (for a desktop agent)",
+)
+
+/** Mirrors Send.tsx's EXPIRY_CHOICES. */
+val EXPIRY_CHOICES = listOf(
+    "Never expires" to null,
+    "Expires in 10 minutes" to 10 * 60 * 1000L,
+    "Expires in 1 hour" to 60 * 60 * 1000L,
+    "Expires in 24 hours" to 24 * 60 * 60 * 1000L,
+)
 
 /**
  * Everything the Compose UI observes. MainActivity owns one instance and
@@ -26,12 +49,23 @@ class ScreenMeshUiState {
     var advancedExpanded by mutableStateOf(false)
 
     // Joined-session info
+    var myDeviceId by mutableStateOf("")
     var workspaceLabel by mutableStateOf<String?>(null)
     var devices by mutableStateOf<List<Device>>(emptyList())
 
-    // Workspace composer + feed
+    // Workspace composer
     var messageText by mutableStateOf("")
     var logLines by mutableStateOf<List<String>>(emptyList())
+    var composerType by mutableStateOf(MeshObjectTypes.TEXT)
+    var expiryIndex by mutableStateOf(0)
+    var deleteAfterOpening by mutableStateOf(false)
+    var requireConfirmation by mutableStateOf(false)
+    /** null = everyone; otherwise a DeviceCapabilities constant — routes via resolveCapability(). */
+    var targetCapability by mutableStateOf<String?>(null)
+
+    // Feed (Library-lite): every object this device has sent or received
+    var objects by mutableStateOf<List<MeshObject>>(emptyList())
+    var deliveries by mutableStateOf<List<Delivery>>(emptyList())
 
     // Pair screen
     var mintedCode by mutableStateOf<String?>(null)
@@ -58,4 +92,11 @@ data class ScreenMeshActions(
     val onCopyToClipboard: (String) -> Unit,
     /** A file/image picked from the system document picker, to send to everyone in the workspace. */
     val onAttachFile: (Uri) -> Unit,
+    val onRefreshFeed: () -> Unit,
+    val onAcceptObject: (String) -> Unit,
+    val onRejectObject: (String) -> Unit,
+    val onMarkOpened: (String) -> Unit,
+    val onRetryDelivery: (String) -> Unit,
+    /** The user picked a save location (system SAF dialog) for this file's bytes. */
+    val onSaveFileToUri: (Uri, FileContent) -> Unit,
 )
