@@ -10,19 +10,23 @@ import com.screenmesh.protocol.Device
 import com.screenmesh.protocol.FileContent
 import com.screenmesh.protocol.MeshObject
 import com.screenmesh.protocol.MeshObjectTypes
+import com.screenmesh.sync.ObjectLocalState
 
 enum class Screen { Onboarding, Workspace, Feed, Devices, Pair }
 
 /** Composer type choices exposed in the UI — mirrors Send.tsx's TYPE_CHOICES,
- *  minus "document"/"agent_task" (document needs Yjs, not ported here; agent_task
- *  has no UI form yet either side of this pass). */
+ *  minus "document" (needs Yjs, not ported here). */
 val COMPOSER_TYPES = listOf(
     MeshObjectTypes.TEXT to "Text",
     MeshObjectTypes.LINK to "Link",
     MeshObjectTypes.CODE to "Code snippet",
     MeshObjectTypes.CHECKLIST to "Checklist (one item per line)",
     MeshObjectTypes.COMMAND to "Command (for a desktop agent)",
+    MeshObjectTypes.AGENT_TASK to "Agent task (structured, for a desktop agent)",
 )
+
+/** Feed view filters — mirrors Library.tsx's VIEW_FILTERS. */
+val FEED_VIEW_FILTERS = listOf("all" to "All", "pinned" to "Pinned", "continue" to "Continue later")
 
 /** Mirrors Send.tsx's EXPIRY_CHOICES. */
 val EXPIRY_CHOICES = listOf(
@@ -62,10 +66,16 @@ class ScreenMeshUiState {
     var requireConfirmation by mutableStateOf(false)
     /** null = everyone; otherwise a DeviceCapabilities constant — routes via resolveCapability(). */
     var targetCapability by mutableStateOf<String?>(null)
+    var taskAction by mutableStateOf("echo")
+    var taskParams by mutableStateOf("{}")
 
     // Feed (Library-lite): every object this device has sent or received
     var objects by mutableStateOf<List<MeshObject>>(emptyList())
     var deliveries by mutableStateOf<List<Delivery>>(emptyList())
+    /** Local-only pin/tag/continue-later — never synced, see ObjectLocalStateStore. */
+    var objectLocalStates by mutableStateOf<Map<String, ObjectLocalState>>(emptyMap())
+    var feedSearch by mutableStateOf("")
+    var feedViewFilter by mutableStateOf("all")
 
     // Pair screen
     var mintedCode by mutableStateOf<String?>(null)
@@ -99,4 +109,10 @@ data class ScreenMeshActions(
     val onRetryDelivery: (String) -> Unit,
     /** The user picked a save location (system SAF dialog) for this file's bytes. */
     val onSaveFileToUri: (Uri, FileContent) -> Unit,
+    val onTogglePin: (String) -> Unit,
+    val onToggleContinueLater: (String) -> Unit,
+    val onAddTag: (String, String) -> Unit,
+    val onRemoveTag: (String, String) -> Unit,
+    /** Hand an object off to another paired device (continueOnDevice). */
+    val onContinueOnDevice: (String, String) -> Unit,
 )

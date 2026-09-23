@@ -67,6 +67,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.screenmesh.protocol.Device
 import com.screenmesh.protocol.DeviceCapabilities
+import com.screenmesh.protocol.MeshObjectTypes
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -272,28 +273,57 @@ private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions
             if (optionsExpanded) {
                 ComposerOptions(state)
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
-                    Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+            if (state.composerType == MeshObjectTypes.AGENT_TASK) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = state.taskAction,
+                        onValueChange = { state.taskAction = it },
+                        label = { Text("Action (e.g. echo, read_file, run_command)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = state.taskParams,
+                        onValueChange = { state.taskParams = it },
+                        label = { Text("Params as JSON, e.g. {\"command\": \"pnpm test\"}") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 3,
+                    )
+                    Button(
+                        onClick = actions.onSend,
+                        enabled = !state.busy && state.taskAction.isNotBlank(),
+                        modifier = Modifier.align(Alignment.End),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Send task")
+                    }
                 }
-                OutlinedTextField(
-                    value = state.messageText,
-                    onValueChange = { state.messageText = it },
-                    placeholder = {
-                        Text(
-                            if (state.composerType == "checklist") "One checklist item per line…"
-                            else "Type a note to send here…",
-                        )
-                    },
-                    modifier = Modifier.weight(1f),
-                    minLines = 1,
-                    maxLines = 4,
-                )
-                IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
+                        Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+                    }
+                    OutlinedTextField(
+                        value = state.messageText,
+                        onValueChange = { state.messageText = it },
+                        placeholder = {
+                            Text(
+                                if (state.composerType == MeshObjectTypes.CHECKLIST) "One checklist item per line…"
+                                else "Type a note to send here…",
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        minLines = 1,
+                        maxLines = 4,
+                    )
+                    IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    }
                 }
             }
         }

@@ -27,6 +27,7 @@ import com.screenmesh.crypto.encodePairingPayload
 import com.screenmesh.crypto.exportWorkspaceKey
 import com.screenmesh.crypto.generateIdentity
 import com.screenmesh.crypto.importWorkspaceKey
+import com.screenmesh.protocol.AgentTaskContent
 import com.screenmesh.protocol.ChecklistContent
 import com.screenmesh.protocol.ChecklistItem
 import com.screenmesh.protocol.FileContent
@@ -40,6 +41,8 @@ import com.screenmesh.sync.FileChunkStore
 import com.screenmesh.sync.LocalEngineStateStore
 import com.screenmesh.sync.LocalStateStore
 import com.screenmesh.sync.MeshEngine
+import com.screenmesh.sync.ObjectLocalState
+import com.screenmesh.sync.ObjectLocalStateStore
 import com.screenmesh.sync.joinWorkspaceHttp
 import com.screenmesh.sync.verifyLanCompanionBootstrap
 import com.screenmesh.sync.rotatePairingTokenHttp
@@ -62,6 +65,7 @@ import com.screenmesh.ui.encodeQrBitmap
 import com.dweekly.cyrinxhil.Role as AcousticRole
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -113,6 +117,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var localState: LocalStateStore
     private lateinit var engineState: LocalEngineStateStore
     private lateinit var fileChunkStore: FileChunkStore
+    private lateinit var objectLocalStateStore: ObjectLocalStateStore
 
     private val ui = ScreenMeshUiState()
 
@@ -146,6 +151,7 @@ class MainActivity : ComponentActivity() {
         localState = LocalStateStore(applicationContext)
         engineState = LocalEngineStateStore(applicationContext)
         fileChunkStore = FileChunkStore(applicationContext)
+        objectLocalStateStore = ObjectLocalStateStore(applicationContext)
 
         val actions = ScreenMeshActions(
             onJoin = { onJoinClicked() },
@@ -166,6 +172,11 @@ class MainActivity : ComponentActivity() {
             onMarkOpened = { objectId -> background.execute { engine?.markOpened(objectId); refreshFeed() } },
             onRetryDelivery = { deliveryId -> background.execute { engine?.retryDelivery(deliveryId); refreshFeed() } },
             onSaveFileToUri = { uri, file -> saveFileToUri(uri, file) },
+            onTogglePin = { objectId -> updateObjectLocalState(objectId) { it.copy(pinned = !it.pinned) } },
+            onToggleContinueLater = { objectId -> updateObjectLocalState(objectId) { it.copy(continueLater = !it.continueLater) } },
+            onAddTag = { objectId, tag -> updateObjectLocalState(objectId) { it.copy(tags = (it.tags + tag).distinct()) } },
+            onRemoveTag = { objectId, tag -> updateObjectLocalState(objectId) { it.copy(tags = it.tags - tag) } },
+            onContinueOnDevice = { objectId, deviceId -> background.execute { engine?.continueOnDevice(objectId, deviceId) } },
         )
         setContent {
             ScreenMeshTheme {
@@ -299,6 +310,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             ui.myDeviceId = identity.deviceId
             ui.devices = newEngine.devicesSnapshot().filter { it.id != identity.deviceId }
+            ui.objectLocalStates = objectLocalStateStore.load(workspaceId, identity.deviceId)
         }
         refreshFeed()
     }
@@ -316,6 +328,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Pin/tag/continue-later — purely local, never synced (see ObjectLocalStateStore's
+     *  doc comment), so this just mutates UI state and persists, no engine call. */
+    private fun updateObjectLocalState(objectId: String, transform: (ObjectLocalState) -> ObjectLocalState) {
+        val workspaceId = currentWorkspaceId ?: return
+        val deviceId = currentIdentity?.deviceId ?: return
+        val current = ui.objectLocalStates[objectId] ?: ObjectLocalState()
+        val updated = ui.objectLocalStates + (objectId to transform(current))
+        ui.objectLocalStates = updated
+        background.execute { objectLocalStateStore.save(workspaceId, deviceId, updated) }
+    }
+
     /** Builds a "one checklist item per line" ChecklistContent — mirrors Send.tsx's checklist path. */
     private fun checklistContentFrom(text: String): ChecklistContent =
         ChecklistContent(
@@ -329,9 +352,10 @@ class MainActivity : ComponentActivity() {
             setStatus("Join a workspace first.")
             return
         }
-        val text = ui.messageText
-        if (text.isEmpty()) return
         val type = ui.composerType
+        val text = ui.messageText
+        if (type != MeshObjectTypes.AGENT_TASK && text.isEmpty()) return
+        if (type == MeshObjectTypes.AGENT_TASK && ui.taskAction.isBlank()) return
         val capability = ui.targetCapability
         val expiresAt = EXPIRY_CHOICES.getOrNull(ui.expiryIndex)?.second?.let { System.currentTimeMillis() + it }
         val options = SendOptions(
@@ -339,6 +363,8 @@ class MainActivity : ComponentActivity() {
             deleteAfterOpening = ui.deleteAfterOpening.takeIf { it },
             requireConfirmation = ui.requireConfirmation.takeIf { it },
         )
+        val taskAction = ui.taskAction
+        val taskParams = ui.taskParams
         background.execute {
             try {
                 val recipients = if (capability != null) {
@@ -352,14 +378,19 @@ class MainActivity : ComponentActivity() {
                     }
                     return@execute
                 }
-                val content = if (type == MeshObjectTypes.CHECKLIST) {
-                    Json.encodeToJsonElement(ChecklistContent.serializer(), checklistContentFrom(text))
-                } else {
-                    Json.encodeToJsonElement(TextContent.serializer(), TextContent(text))
+                val content = when (type) {
+                    MeshObjectTypes.CHECKLIST -> Json.encodeToJsonElement(ChecklistContent.serializer(), checklistContentFrom(text))
+                    MeshObjectTypes.AGENT_TASK -> {
+                        val params = taskParams.trim().takeIf { it.isNotEmpty() && it != "{}" }?.let {
+                            runCatching { Json.parseToJsonElement(it).jsonObject.toMap() }.getOrNull()
+                        }
+                        Json.encodeToJsonElement(AgentTaskContent.serializer(), AgentTaskContent(action = taskAction, params = params))
+                    }
+                    else -> Json.encodeToJsonElement(TextContent.serializer(), TextContent(text))
                 }
                 currentEngine.sendObject(type, content, recipients, options)
                 runOnUiThread {
-                    appendLog("Sent ($type): $text")
+                    appendLog(if (type == MeshObjectTypes.AGENT_TASK) "Sent task: $taskAction" else "Sent ($type): $text")
                     ui.messageText = ""
                 }
                 refreshFeed()
@@ -458,12 +489,14 @@ class MainActivity : ComponentActivity() {
         localState.clear()
         if (workspaceId != null && deviceId != null) {
             engineState.clear(workspaceId, deviceId)
+            objectLocalStateStore.clear(workspaceId, deviceId)
         }
         ui.pairingCodeField = ""
         ui.logLines = emptyList()
         ui.devices = emptyList()
         ui.objects = emptyList()
         ui.deliveries = emptyList()
+        ui.objectLocalStates = emptyMap()
         ui.myDeviceId = ""
         ui.workspaceLabel = null
         ui.mintedCode = null

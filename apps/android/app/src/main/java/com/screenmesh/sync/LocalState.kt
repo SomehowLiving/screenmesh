@@ -14,6 +14,8 @@ import com.screenmesh.protocol.Delivery
 import com.screenmesh.protocol.Device
 import com.screenmesh.protocol.MeshObject
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 private const val PREFS_NAME = "screenmesh_state"
@@ -166,4 +168,47 @@ class LocalEngineStateStore(context: Context) : EngineStateStore {
     }
 
     private fun key(workspaceId: String, deviceId: String): String = "$KEY_ENGINE_PREFIX$workspaceId:$deviceId"
+}
+
+/**
+ * Personal organization metadata — Kotlin mirror of packages/storage/src/
+ * db.ts's ObjectLocalState. Deliberately local-only, same as the web side:
+ * pinning/tagging/continuing-later an object should never sync to anyone
+ * else's workspace view.
+ */
+@Serializable
+data class ObjectLocalState(
+    val pinned: Boolean = false,
+    val tags: List<String> = emptyList(),
+    val continueLater: Boolean = false,
+    val lastOpenedAt: Long? = null,
+)
+
+private const val KEY_OBJECT_STATE_PREFIX = "object_local_state_"
+
+/** SharedPreferences-backed: one JSON blob per workspace/device, objectId -> ObjectLocalState. */
+class ObjectLocalStateStore(context: Context) {
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    fun load(workspaceId: String, deviceId: String): Map<String, ObjectLocalState> {
+        val raw = prefs.getString(key(workspaceId, deviceId), null) ?: return emptyMap()
+        return try {
+            Json.decodeFromString(MapSerializer(String.serializer(), ObjectLocalState.serializer()), raw)
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun save(workspaceId: String, deviceId: String, states: Map<String, ObjectLocalState>) {
+        prefs.edit().putString(
+            key(workspaceId, deviceId),
+            Json.encodeToString(MapSerializer(String.serializer(), ObjectLocalState.serializer()), states),
+        ).apply()
+    }
+
+    fun clear(workspaceId: String, deviceId: String) {
+        prefs.edit().remove(key(workspaceId, deviceId)).apply()
+    }
+
+    private fun key(workspaceId: String, deviceId: String): String = "$KEY_OBJECT_STATE_PREFIX$workspaceId:$deviceId"
 }
