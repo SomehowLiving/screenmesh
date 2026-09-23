@@ -8,11 +8,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.wifi.p2p.WifiP2pManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +27,7 @@ import com.screenmesh.crypto.encodePairingPayload
 import com.screenmesh.crypto.exportWorkspaceKey
 import com.screenmesh.crypto.generateIdentity
 import com.screenmesh.crypto.importWorkspaceKey
+import com.screenmesh.protocol.FileContent
 import com.screenmesh.protocol.MeshObjectTypes
 import com.screenmesh.sync.AppState
 import com.screenmesh.sync.EngineConfig
@@ -51,8 +55,10 @@ import com.screenmesh.ui.ScreenMeshUiState
 import com.screenmesh.ui.Screen
 import com.screenmesh.ui.encodeQrBitmap
 import com.dweekly.cyrinxhil.Role as AcousticRole
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -60,6 +66,18 @@ import javax.crypto.SecretKey
 
 /** How long "Write to NFC tag" stays armed before a tag tap is treated as a plain read instead. */
 private const val NFC_WRITE_ARM_WINDOW_MS = 30_000L
+
+/** Mirrors Send.tsx's MAX_FILE_BYTES — bounded mainly to keep memory use on
+ *  the sending device reasonable; files above ~150KB base64 already travel
+ *  chunked (see MeshEngine.kt's FILE_CHUNK_SIZE_B64), so the ceiling here is
+ *  generous, not a chunking threshold. */
+private const val MAX_FILE_BYTES = 25 * 1024 * 1024
+
+private fun formatSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+}
 
 /**
  * Compose-based reference UI exercising MeshEngine end to end against a
@@ -138,6 +156,7 @@ class MainActivity : ComponentActivity() {
             onAcousticResponder = { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.SLAVE) } },
             onMintPairCode = { onMintPairCodeClicked() },
             onCopyToClipboard = { text -> copyToClipboard(text) },
+            onAttachFile = { uri -> onAttachFilePicked(uri) },
         )
         setContent {
             ScreenMeshTheme {
@@ -293,6 +312,65 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread { setStatus("Send failed: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Reads a file/image picked from the system document picker (Storage
+     * Access Framework — no storage permission needed) and sends it to
+     * everyone in the workspace. Mirrors Send.tsx's attach() + immediate
+     * send rather than staging an attachment chip first — Android has no
+     * per-recipient targeting yet (always "everyone"), so there's nothing
+     * meaningful to stage a choice around.
+     */
+    private fun onAttachFilePicked(uri: Uri) {
+        val currentEngine = engine
+        if (currentEngine == null) {
+            setStatus("Join a workspace first.")
+            return
+        }
+        runOnUiThread { ui.busy = true }
+        background.execute {
+            try {
+                val resolver = contentResolver
+                val mimeType = resolver.getType(uri) ?: "application/octet-stream"
+                var name = "file"
+                resolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0 && cursor.moveToFirst()) {
+                        cursor.getString(nameIndex)?.let { name = it }
+                    }
+                }
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("Could not read the picked file")
+                if (bytes.size > MAX_FILE_BYTES) {
+                    runOnUiThread {
+                        ui.busy = false
+                        setStatus("File is too large (${formatSize(bytes.size.toLong())}) — the limit is 25 MB for now.")
+                    }
+                    return@execute
+                }
+                val recipients = currentEngine.devicesSnapshot().map { it.id }
+                if (recipients.isEmpty()) {
+                    runOnUiThread {
+                        ui.busy = false
+                        setStatus("No other devices in this workspace yet.")
+                    }
+                    return@execute
+                }
+                val fileContent = FileContent(name = name, mimeType = mimeType, size = bytes.size.toLong(), dataB64 = Base64.encodeToString(bytes, Base64.NO_WRAP))
+                val objectType = if (mimeType.startsWith("image/")) MeshObjectTypes.IMAGE else MeshObjectTypes.FILE
+                currentEngine.sendObject(objectType, Json.encodeToJsonElement(FileContent.serializer(), fileContent), recipients)
+                runOnUiThread {
+                    ui.busy = false
+                    appendLog("Sent ${if (objectType == MeshObjectTypes.IMAGE) "image" else "file"}: $name (${formatSize(bytes.size.toLong())})")
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    ui.busy = false
+                    setStatus("Attach failed: ${e.message}")
+                }
             }
         }
     }

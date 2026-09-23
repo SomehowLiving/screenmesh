@@ -69,10 +69,15 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // QR code generation for the Pair screen — encode only, no camera
-    // scanning dependency needed (BLE/NFC already cover code hand-off, and
-    // pasting a code/link covers the rest).
+    // QR code generation (Pair screen) and scanning (Onboarding "Scan QR
+    // code" — reads a pairing code straight off another device's screen,
+    // same as the web PWA scanning a phone's camera). zxing-android-embedded
+    // wraps CameraX + zxing:core into a ready-made scan Activity/
+    // ActivityResultContract, including its own camera-permission prompt —
+    // far less code than a hand-rolled CameraX + ML Kit analyzer for a
+    // single "scan one QR code" use case.
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // Relay client (WebSocket + HTTP pairing calls) — same role as
     // WebSocketRelayTransport (packages/transport) and the fetch() calls

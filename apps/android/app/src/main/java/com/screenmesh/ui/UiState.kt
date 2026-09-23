@@ -1,5 +1,6 @@
 package com.screenmesh.ui
 
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -55,4 +56,6 @@ data class ScreenMeshActions(
     val onAcousticResponder: () -> Unit,
     val onMintPairCode: () -> Unit,
     val onCopyToClipboard: (String) -> Unit,
+    /** A file/image picked from the system document picker, to send to everyone in the workspace. */
+    val onAttachFile: (Uri) -> Unit,
 )

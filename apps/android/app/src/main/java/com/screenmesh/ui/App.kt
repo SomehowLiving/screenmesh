@@ -1,5 +1,7 @@
 package com.screenmesh.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,9 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -50,6 +54,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.screenmesh.protocol.Device
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,6 +121,13 @@ fun ScreenMeshApp(state: ScreenMeshUiState, actions: ScreenMeshActions) {
 
 @Composable
 private fun OnboardingScreen(state: ScreenMeshUiState, actions: ScreenMeshActions) {
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        // decodePairingPayload accepts either a bare "SM1./SM2." code or a
+        // full "<origin>/#join=<code>" join URL — whatever the QR encodes —
+        // so the scanned text can be dropped straight into the same field
+        // pasting uses, no separate parsing needed here.
+        result.contents?.let { state.pairingCodeField = it }
+    }
     Column(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -148,6 +161,22 @@ private fun OnboardingScreen(state: ScreenMeshUiState, actions: ScreenMeshAction
             minLines = 2,
             maxLines = 4,
         )
+        OutlinedButton(
+            onClick = {
+                scanLauncher.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("Point the camera at the pairing QR code")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false),
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Scan QR code")
+        }
         Button(
             onClick = actions.onJoin,
             enabled = !state.busy,
@@ -169,6 +198,9 @@ private fun OnboardingScreen(state: ScreenMeshUiState, actions: ScreenMeshAction
 
 @Composable
 private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions) {
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { actions.onAttachFile(it) }
+    }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -201,6 +233,9 @@ private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
+                Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+            }
             OutlinedTextField(
                 value = state.messageText,
                 onValueChange = { state.messageText = it },
