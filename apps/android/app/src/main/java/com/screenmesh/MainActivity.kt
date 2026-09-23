@@ -365,6 +365,7 @@ class MainActivity : ComponentActivity() {
         )
         val taskAction = ui.taskAction
         val taskParams = ui.taskParams
+        val documentTitle = ui.documentTitle
         background.execute {
             try {
                 val recipients = if (capability != null) {
@@ -386,12 +387,17 @@ class MainActivity : ComponentActivity() {
                         }
                         Json.encodeToJsonElement(AgentTaskContent.serializer(), AgentTaskContent(action = taskAction, params = params))
                     }
+                    MeshObjectTypes.DOCUMENT -> Json.encodeToJsonElement(
+                        TextContent.serializer(),
+                        TextContent(text, title = documentTitle.trim().ifBlank { null }),
+                    )
                     else -> Json.encodeToJsonElement(TextContent.serializer(), TextContent(text))
                 }
                 currentEngine.sendObject(type, content, recipients, options)
                 runOnUiThread {
                     appendLog(if (type == MeshObjectTypes.AGENT_TASK) "Sent task: $taskAction" else "Sent ($type): $text")
                     ui.messageText = ""
+                    if (type == MeshObjectTypes.DOCUMENT) ui.documentTitle = ""
                 }
                 refreshFeed()
             } catch (e: Exception) {

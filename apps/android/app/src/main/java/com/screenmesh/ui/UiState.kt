@@ -14,10 +14,17 @@ import com.screenmesh.sync.ObjectLocalState
 
 enum class Screen { Onboarding, Workspace, Feed, Devices, Pair }
 
-/** Composer type choices exposed in the UI — mirrors Send.tsx's TYPE_CHOICES,
- *  minus "document" (needs Yjs, not ported here). */
+/**
+ * Composer type choices exposed in the UI — mirrors Send.tsx's TYPE_CHOICES.
+ * "document" is sent/received as plain last-write-wins TextContent (title +
+ * text), same as text/code/link — Android doesn't merge live Yjs edits from
+ * web peers for any of those types (YJS_UPDATE ops are ignored, see
+ * MeshEngine.kt's applyOp doc comment), so document needs no CRDT port to
+ * be usable here; it just gets a title field the other text-like types don't.
+ */
 val COMPOSER_TYPES = listOf(
     MeshObjectTypes.TEXT to "Text",
+    MeshObjectTypes.DOCUMENT to "Document",
     MeshObjectTypes.LINK to "Link",
     MeshObjectTypes.CODE to "Code snippet",
     MeshObjectTypes.CHECKLIST to "Checklist (one item per line)",
@@ -68,6 +75,7 @@ class ScreenMeshUiState {
     var targetCapability by mutableStateOf<String?>(null)
     var taskAction by mutableStateOf("echo")
     var taskParams by mutableStateOf("{}")
+    var documentTitle by mutableStateOf("")
 
     // Feed (Library-lite): every object this device has sent or received
     var objects by mutableStateOf<List<MeshObject>>(emptyList())

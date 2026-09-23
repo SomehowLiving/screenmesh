@@ -301,28 +301,39 @@ private fun WorkspaceScreen(state: ScreenMeshUiState, actions: ScreenMeshActions
                     }
                 }
             } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
-                        Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (state.composerType == MeshObjectTypes.DOCUMENT) {
+                        OutlinedTextField(
+                            value = state.documentTitle,
+                            onValueChange = { state.documentTitle = it },
+                            label = { Text("Title (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
                     }
-                    OutlinedTextField(
-                        value = state.messageText,
-                        onValueChange = { state.messageText = it },
-                        placeholder = {
-                            Text(
-                                if (state.composerType == MeshObjectTypes.CHECKLIST) "One checklist item per line…"
-                                else "Type a note to send here…",
-                            )
-                        },
-                        modifier = Modifier.weight(1f),
-                        minLines = 1,
-                        maxLines = 4,
-                    )
-                    IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        IconButton(onClick = { filePicker.launch("*/*") }, enabled = !state.busy) {
+                            Icon(Icons.Filled.AttachFile, contentDescription = "Attach a file or image")
+                        }
+                        OutlinedTextField(
+                            value = state.messageText,
+                            onValueChange = { state.messageText = it },
+                            placeholder = {
+                                Text(
+                                    if (state.composerType == MeshObjectTypes.CHECKLIST) "One checklist item per line…"
+                                    else "Type a note to send here…",
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
+                            minLines = 1,
+                            maxLines = 4,
+                        )
+                        IconButton(onClick = actions.onSend, enabled = !state.busy && state.messageText.isNotBlank()) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        }
                     }
                 }
             }

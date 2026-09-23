@@ -97,6 +97,10 @@ private fun previewFor(obj: MeshObject): String = try {
     when (obj.type) {
         MeshObjectTypes.TEXT, MeshObjectTypes.LINK, MeshObjectTypes.CODE, MeshObjectTypes.COMMAND, MeshObjectTypes.CLIPBOARD ->
             Json.decodeFromJsonElement(TextContent.serializer(), obj.content).text
+        MeshObjectTypes.DOCUMENT -> {
+            val doc = Json.decodeFromJsonElement(TextContent.serializer(), obj.content)
+            doc.title?.let { "$it\n${doc.text}" } ?: doc.text
+        }
         MeshObjectTypes.CHECKLIST -> {
             val items = Json.decodeFromJsonElement(ChecklistContent.serializer(), obj.content).items
             "${items.count { it.done }} of ${items.size} tasks complete"

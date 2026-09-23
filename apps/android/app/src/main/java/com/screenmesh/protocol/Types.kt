@@ -41,6 +41,7 @@ object MeshObjectTypes {
     const val CLIPBOARD = "clipboard"
     const val COMMAND = "command"
     const val AGENT_TASK = "agent_task"
+    const val DOCUMENT = "document"
 }
 
 object DeliveryStatuses {
@@ -119,7 +120,7 @@ data class Delivery(
 )
 
 @Serializable
-data class TextContent(val text: String)
+data class TextContent(val text: String, val title: String? = null)
 
 @Serializable
 data class FileContent(
