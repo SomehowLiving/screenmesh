@@ -12,6 +12,7 @@ import {
   type Delivery,
   type DeliveryBundle,
   type Device,
+  type EditPresencePayload,
   type EnvelopeJson,
   type FileChunkAckPayload,
   type FileChunkPayload,
@@ -58,6 +59,11 @@ const FILE_TRANSFER_STALL_MS = 20_000;
 const FILE_TRANSFER_FAIL_MS = 3 * 60_000;
 /** How often to sweep expired objects/bundles and advance store-carry-forward. */
 const DEFAULT_SWEEP_INTERVAL_MS = 15_000;
+/** No EDIT_PRESENCE heartbeat this long → treat that device as no longer
+ *  editing (it closed the editor without sending the `active: false`
+ *  ping, e.g. it crashed or lost connectivity). Comfortably longer than
+ *  the UI's own heartbeat interval to tolerate normal jitter. */
+const EDIT_PRESENCE_STALE_MS = 10_000;
 
 /** Object types whose text is collaboratively editable via Yjs. */
 const EDITABLE_TYPES = new Set(["text", "document", "code", "link"]);
@@ -154,6 +160,13 @@ export interface EngineConfig {
    * consumers with no reactive store — the Node desktop agent — do.
    */
   onObjectReceived?: (object: MeshObject, senderId: string) => void;
+  /**
+   * Fires whenever the set of OTHER devices actively editing an object
+   * changes (an EDIT_PRESENCE ping arrived, or a stale entry was swept).
+   * Ephemeral, not backed by Dexie, so unlike onObjectReceived the web UI
+   * needs this too — there's no liveQuery to react to instead.
+   */
+  onEditingPresenceChanged?: (objectId: string, activeDeviceIds: string[]) => void;
 }
 
 /**
@@ -172,6 +185,10 @@ export class MeshEngine {
   private pairingSecret!: Uint8Array;
   /** In-memory Yjs docs for collaboratively edited objects. */
   private readonly ydocs = new Map<string, Y.Doc>();
+  /** Ephemeral "who's editing this object right now" — objectId -> deviceId
+   *  -> last heartbeat receive time. Never persisted; presence is only
+   *  meaningful while devices are live. */
+  private readonly editingPresence = new Map<string, Map<string, number>>();
   /** In-progress file reassembly buffers, keyed by fileId. Rehydrated from
    *  the durable `fileChunks` table in start() so a reload mid-transfer
    *  doesn't lose progress — this Map is a read/write-through cache over it. */
@@ -567,8 +584,23 @@ export class MeshEngine {
   async editText(objectId: string, newText: string): Promise<void> {
     const object = await this.cfg.db.objects.get(objectId);
     if (!object || !EDITABLE_TYPES.has(object.type)) return;
+    // If no device has ever sent a Yjs update for this object (e.g. it was
+    // created by a peer that doesn't speak Yjs, like the Android app — see
+    // docs/Android.md), docFor() is about to hand back a doc seeded empty,
+    // not from the object's real content. Seed it here, from the last
+    // known text, before this edit — otherwise this edit's diff is taken
+    // against a false empty baseline and the resulting Y.Text loses the
+    // object's true prior content from its CRDT history. Only safe to do
+    // for OUR OWN edit: seeding docFor() itself would risk duplicating
+    // content against a genuine incoming update from a peer with real
+    // Yjs history for this object (a different, already-seeded lineage).
+    const hadNoPriorYjsState = !this.ydocs.has(objectId) && !(await this.cfg.db.ydocs.get(objectId));
     const doc = await this.docFor(objectId);
-    doc.transact(() => applyTextDiff(doc.getText("text"), newText));
+    const priorText = hadNoPriorYjsState ? ((object.content as TextContent | null)?.text ?? "") : "";
+    doc.transact(() => {
+      if (priorText) doc.getText("text").insert(0, priorText);
+      applyTextDiff(doc.getText("text"), newText);
+    });
     await this.persistDoc(objectId, doc);
     const title = (object.content as TextContent | null)?.title;
     await this.cfg.db.objects.update(objectId, {
@@ -581,6 +613,26 @@ export class MeshEngine {
         updateB64: toBase64(Y.encodeStateAsUpdate(doc)),
       } satisfies YjsUpdatePayload),
     ]);
+  }
+
+  /**
+   * Tell other devices this one has (or no longer has) an object's editor
+   * open. Call on a heartbeat (every few seconds) while active, and once
+   * more with `active: false` on close/unmount — see EditPresencePayload's
+   * doc comment for why this exists and what it doesn't guarantee.
+   */
+  async setEditingPresence(objectId: string, active: boolean): Promise<void> {
+    await this.broadcastOps([
+      this.makeOp("EDIT_PRESENCE", objectId, { objectId, active } satisfies EditPresencePayload),
+    ]);
+  }
+
+  /** Other devices (not this one) currently believed to have `objectId` open for editing. */
+  editingPresenceFor(objectId: string): string[] {
+    const entries = this.editingPresence.get(objectId);
+    if (!entries) return [];
+    const cutoff = this.now() - EDIT_PRESENCE_STALE_MS;
+    return [...entries.entries()].filter(([, lastSeenAt]) => lastSeenAt >= cutoff).map(([deviceId]) => deviceId);
   }
 
   /** Last-write-wins content replacement (checklist toggles, etc.). */
@@ -1136,7 +1188,13 @@ export class MeshEngine {
    * SEND_TO_DEVICE creates even exists.
    */
   private async applyOp(senderId: string, op: Operation<unknown>): Promise<MeshObject | null> {
-    await this.cfg.db.operations.put(op);
+    // EDIT_PRESENCE is a heartbeat, not part of the durable object model —
+    // persisting it would grow the oplog by one row every few seconds for
+    // as long as anyone's editor stays open, for data that's meaningless
+    // once superseded. Every other op type IS persisted here.
+    if (op.type !== "EDIT_PRESENCE") {
+      await this.cfg.db.operations.put(op);
+    }
     const now = this.now();
     let newObject: MeshObject | null = null;
 
@@ -1175,6 +1233,21 @@ export class MeshEngine {
             });
           }
         }
+        break;
+      }
+      case "EDIT_PRESENCE": {
+        const { objectId, active } = op.payload as EditPresencePayload;
+        let entries = this.editingPresence.get(objectId);
+        if (active) {
+          if (!entries) {
+            entries = new Map();
+            this.editingPresence.set(objectId, entries);
+          }
+          entries.set(senderId, now);
+        } else {
+          entries?.delete(senderId);
+        }
+        this.cfg.onEditingPresenceChanged?.(objectId, this.editingPresenceFor(objectId));
         break;
       }
       case "CONTINUE_ON_DEVICE": {

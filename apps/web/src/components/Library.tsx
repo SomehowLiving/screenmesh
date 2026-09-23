@@ -13,6 +13,7 @@ import { RETYPEABLE_TYPES, type MeshEngine } from "@screenmesh/sync";
 import type { LocalIdentity } from "../lib/app.js";
 import { detectContent, type ContentFacet } from "../lib/content-detection.js";
 import { Markdown } from "../lib/markdown.js";
+import { useEditingPresence } from "../lib/use-editing-presence.js";
 import { Button } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { ActionMenu } from "./ui/action-menu.js";
@@ -375,6 +376,7 @@ function ObjectDetail(props: { object: MeshObject; devices: Array<{ id: string; 
   const link = detectContent(text).urls[0];
   const others = props.devices.filter((device) => device.id !== props.me.deviceId);
   const canRetype = RETYPEABLE_TYPES.includes(props.object.type);
+  const editingElsewhere = useEditingPresence(props.engine, props.object.id, editable && editing);
 
   function saveChecklist(items: ChecklistContent["items"]) { void props.engine.updateObjectContent(props.object.id, { items }); }
   async function copy() { await navigator.clipboard.writeText(text); }
@@ -434,6 +436,11 @@ function ObjectDetail(props: { object: MeshObject; devices: Array<{ id: string; 
             {file && <div className="rounded-lg border border-border bg-card px-4 py-3"><p className="text-sm font-medium">{file.name}</p><p className="mt-1 text-xs text-muted-foreground">{file.mimeType} · {formatSize(file.size)}</p></div>}
             {checklist && <div className="space-y-2 rounded-xl border border-border bg-card p-4">{checklist.items.map((item) => <label key={item.id} className="flex cursor-pointer items-center gap-3 text-sm"><input type="checkbox" checked={item.done} onChange={() => saveChecklist(checklist.items.map((entry) => entry.id === item.id ? { ...entry, done: !entry.done } : entry))} className="size-4 rounded border-input accent-foreground" /><span className={item.done ? "text-muted-foreground line-through" : ""}>{item.text}</span></label>)}</div>}
             {props.object.type === "agent_task" && <pre className="overflow-x-auto rounded-xl bg-foreground p-4 text-xs leading-6 text-primary-foreground">{JSON.stringify(props.object.content as AgentTaskContent, null, 2)}</pre>}
+            {editable && editingElsewhere.length > 0 && (
+              <p className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-500">
+                {editingElsewhere.map((id) => props.nameOf(id)).join(", ")} {editingElsewhere.length === 1 ? "is" : "are"} also editing this right now — edits merge, but check before saving to avoid stepping on each other.
+              </p>
+            )}
             {!file && !checklist && props.object.type !== "agent_task" && (
               editing
                 ? <textarea autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} className={`min-h-52 w-full resize-y rounded-xl border border-input bg-card p-4 text-sm leading-6 outline-none focus:ring-1 focus:ring-ring ${props.object.type === "code" ? "font-mono" : ""}`} />

@@ -20,7 +20,8 @@ export type OperationType =
   | "CARRY_BUNDLE"
   | "REJECT_OBJECT"
   | "FILE_CHUNK"
-  | "FILE_CHUNK_ACK";
+  | "FILE_CHUNK_ACK"
+  | "EDIT_PRESENCE";
 
 export interface Operation<TPayload = unknown> {
   operationId: string;
@@ -133,4 +134,19 @@ export interface FileChunkPayload {
 export interface FileChunkAckPayload {
   fileId: string;
   chunkIndex: number;
+}
+
+/**
+ * Ephemeral "someone is editing this" signal — a UX safeguard, not part of
+ * the durable object model. Sent as a heartbeat while a device has an
+ * editable object's editor open, and once more with `active: false` on
+ * close. Never blocks another device from also editing; it exists only so
+ * a person can see they might be about to collide with someone else,
+ * since the underlying Yjs merge can't fully protect a peer's first edit
+ * on an object it never got seeded Yjs state for (see engine.ts's
+ * editText doc comment).
+ */
+export interface EditPresencePayload {
+  objectId: string;
+  active: boolean;
 }

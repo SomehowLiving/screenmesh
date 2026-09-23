@@ -3,8 +3,8 @@
  * three MeshEngines (IndexedDB via fake-indexeddb) exchange objects and
  * exercise the delivery lifecycle, file content, revocation, per-pair
  * Double Ratchet encryption, expiring objects, delivery options,
- * store-carry-forward, chunked file drop, the clipboard tunnel, and
- * capability routing.
+ * store-carry-forward, chunked file drop, the clipboard tunnel,
+ * capability routing, and the edit-presence heartbeat.
  *
  * Run: pnpm exec tsx packages/sync/scripts/engine-smoke.ts
  */
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     pairingToken: token2,
     device: await info(c, "Engine C", "tablet"),
   });
-  console.log("[1/19] workspace registered with three devices");
+  console.log("[1/20] workspace registered with three devices");
 
   const ea = await makeEngine(a, "engine-a", workspaceId, workspaceKey, a.deviceId);
   const eb = await makeEngine(b, "engine-b", workspaceId, workspaceKey, a.deviceId);
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
       (await ec.db.devices.count()) === 3
     );
   });
-  console.log("[2/19] all engines connected, presence synced");
+  console.log("[2/20] all engines connected, presence synced");
 
   // Stop C's engine right away: everything through step 13 only involves
   // A and B, but broadcastOps (editText/updateObjectContent) sends to
@@ -180,20 +180,20 @@ async function main(): Promise<void> {
   if ((received?.content as { text: string }).text !== "pnpm run integration-test") {
     throw new Error("content mismatch");
   }
-  console.log("[3/19] object created on A appeared decrypted on B");
+  console.log("[3/20] object created on A appeared decrypted on B");
 
   await waitFor("delivery ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[4/19] A's delivery status advanced to delivered");
+  console.log("[4/20] A's delivery status advanced to delivered");
 
   await eb.engine.markOpened(object.id);
   await waitFor("opened ack on A", async () => {
     const delivery = await ea.db.deliveries.where("objectId").equals(object.id).first();
     return delivery?.status === "opened";
   });
-  console.log("[5/19] opened receipt propagated back to A");
+  console.log("[5/20] opened receipt propagated back to A");
 
   const pixels = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]);
   const image = await ea.engine.sendObject(
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
   if ((receivedImage?.content as { dataB64: string }).dataB64 !== pixels.toString("base64")) {
     throw new Error("image bytes corrupted in transit");
   }
-  console.log("[6/19] image object with binary content arrived intact");
+  console.log("[6/20] image object with binary content arrived intact");
 
   // Checklist: created on A, toggled on B, LWW-merged back on A.
   const checklist = await ea.engine.sendObject(
@@ -240,7 +240,7 @@ async function main(): Promise<void> {
     const items = (obj?.content as { items: Array<{ id: string; done: boolean }> })?.items;
     return items?.find((i) => i.id === "i1")?.done === true;
   });
-  console.log("[7/19] checklist toggled on B synced back to A");
+  console.log("[7/20] checklist toggled on B synced back to A");
 
   // Yjs: concurrent edits on A and B merge instead of overwriting.
   const note = await ea.engine.sendObject(
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
       onA.includes("shared note")
     );
   });
-  console.log("[8/19] concurrent Yjs edits merged identically on both devices");
+  console.log("[8/20] concurrent Yjs edits merged identically on both devices");
 
   // Continue-on-device: A hands the note to B, which gets a focus request.
   await ea.engine.continueOnDevice(note.id, b.deviceId);
@@ -271,7 +271,7 @@ async function main(): Promise<void> {
     const focus = await eb.db.settings.get("focusObject");
     return (focus?.value as { objectId: string } | undefined)?.objectId === note.id;
   });
-  console.log("[9/19] continue-on-device focus request arrived on B");
+  console.log("[9/20] continue-on-device focus request arrived on B");
 
   // Expiring objects: swept away on both ends once expiresAt passes.
   const expiring = await ea.engine.sendObject(
@@ -286,7 +286,7 @@ async function main(): Promise<void> {
     const delivery = await ea.db.deliveries.where("objectId").equals(expiring.id).first();
     return delivery?.status === "expired";
   });
-  console.log("[10/19] expiring object swept from both devices, delivery marked expired");
+  console.log("[10/20] expiring object swept from both devices, delivery marked expired");
 
   // deleteAfterOpening: recipient's copy vanishes right after markOpened.
   const selfDestruct = await ea.engine.sendObject(
@@ -303,7 +303,7 @@ async function main(): Promise<void> {
   if (await eb.db.objects.get(selfDestruct.id)) {
     throw new Error("deleteAfterOpening did not remove the object on the recipient");
   }
-  console.log("[11/19] deleteAfterOpening removed B's copy right after opening");
+  console.log("[11/20] deleteAfterOpening removed B's copy right after opening");
 
   // requireConfirmation + accept: gated as "pending" until B explicitly accepts.
   const gated = await ea.engine.sendObject(
@@ -325,7 +325,7 @@ async function main(): Promise<void> {
     const delivery = await ea.db.deliveries.where("objectId").equals(gated.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[12/19] requireConfirmation gated delivery until accepted");
+  console.log("[12/20] requireConfirmation gated delivery until accepted");
 
   // requireConfirmation + reject: B declines, A is told, B keeps nothing.
   const declined = await ea.engine.sendObject(
@@ -342,7 +342,7 @@ async function main(): Promise<void> {
   if (await eb.db.objects.get(declined.id)) {
     throw new Error("rejectObject should have removed B's local copy");
   }
-  console.log("[13/19] requireConfirmation reject notified A and cleared B's copy");
+  console.log("[13/20] requireConfirmation reject notified A and cleared B's copy");
 
   // Store–carry–forward. The relay's OWN server-side queue already
   // covers "recipient offline, sender/relay fine" (Phase 1) — any send
@@ -448,7 +448,7 @@ async function main(): Promise<void> {
   await waitFor("B's carried copy is cleared after forwarding", async () => {
     return !(await eb.db.carried.get(carryEnvelope.messageId));
   });
-  console.log("[14/19] store-carry-forward: B carried A's first-ever message to C and delivered it");
+  console.log("[14/20] store-carry-forward: B carried A's first-ever message to C and delivered it");
 
   // Secure file drop: a file whose base64 payload exceeds the chunk
   // threshold travels as a sequence of FILE_CHUNK envelopes, reassembled
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
     const delivery = await ea.db.deliveries.where("objectId").equals(bigFile.id).first();
     return delivery?.status === "delivered";
   });
-  console.log("[15/19] secure file drop: large file chunked, reassembled byte-for-byte, delivery acked");
+  console.log("[15/20] secure file drop: large file chunked, reassembled byte-for-byte, delivery acked");
 
   // Temporary clipboard tunnel: same expiring-object + deleteAfterOpening
   // machinery as Phase 2, just a dedicated content type.
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
   await waitFor("clipboard share erases itself on B after opening", async () => {
     return !(await eb.db.objects.get(clip.id));
   });
-  console.log("[16/19] temporary clipboard tunnel: shared, received, erased on first paste");
+  console.log("[16/20] temporary clipboard tunnel: shared, received, erased on first paste");
 
   // Capability routing: B advertises "terminal" via the real HTTP API (so
   // it flows through the same presence path a real client would use); A
@@ -514,7 +514,7 @@ async function main(): Promise<void> {
   if (resolved[0]?.status !== "online") {
     throw new Error("expected B to resolve as online");
   }
-  console.log("[17/19] capability routing: A resolved \"terminal\" to B via presence-advertised capabilities");
+  console.log("[17/20] capability routing: A resolved \"terminal\" to B via presence-advertised capabilities");
 
   // Revoke C. Per-pair ratcheting means this needs no group-wide rekey —
   // the owner just drops the local ratchet session with C and the relay
@@ -545,7 +545,7 @@ async function main(): Promise<void> {
   if (await ea.db.ratchets.get(c.deviceId)) {
     throw new Error("A's ratchet session with the revoked device should have been dropped");
   }
-  console.log("[18/19] revoked device rejected by relay; A dropped its ratchet session with C");
+  console.log("[18/20] revoked device rejected by relay; A dropped its ratchet session with C");
 
   // Prove revocation is pairwise-isolated: A-B keeps working completely
   // unaffected — no rekey, no interruption, because their ratchet session
@@ -561,7 +561,16 @@ async function main(): Promise<void> {
   if ((postRevocationObj?.content as { text: string }).text !== "unaffected by C's revocation") {
     throw new Error("post-revocation content mismatch");
   }
-  console.log("[19/19] A-B ratchet session unaffected by C's revocation — no group rekey needed");
+  console.log("[19/20] A-B ratchet session unaffected by C's revocation — no group rekey needed");
+
+  // Editing-presence heartbeat: an ephemeral "who's editing this" signal,
+  // not part of the durable object model (see EditPresencePayload's doc
+  // comment) — A pings active, B sees it; A pings inactive, B sees it clear.
+  await ea.engine.setEditingPresence(note.id, true);
+  await waitFor("B sees A editing", async () => eb.engine.editingPresenceFor(note.id).includes(a.deviceId));
+  await ea.engine.setEditingPresence(note.id, false);
+  await waitFor("B sees A stop editing", async () => !eb.engine.editingPresenceFor(note.id).includes(a.deviceId));
+  console.log("[20/20] edit-presence heartbeat: B saw A start and stop editing the shared note");
 
   await ea.engine.stop();
   await eb.engine.stop();

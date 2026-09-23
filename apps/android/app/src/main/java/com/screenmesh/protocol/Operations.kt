@@ -28,6 +28,7 @@ object OperationTypes {
     const val REJECT_OBJECT = "REJECT_OBJECT"
     const val FILE_CHUNK = "FILE_CHUNK"
     const val FILE_CHUNK_ACK = "FILE_CHUNK_ACK"
+    const val EDIT_PRESENCE = "EDIT_PRESENCE"
 }
 
 @Serializable
@@ -114,3 +115,12 @@ data class FileChunkAckPayload(
     val fileId: String,
     val chunkIndex: Int,
 )
+
+/**
+ * Ephemeral "someone is editing this" heartbeat (a UX safeguard on the web
+ * side, never a lock) — NOT applied by MeshEngine.kt, same as YjsUpdatePayload:
+ * Android has no live-edit UI yet, so there's nothing to surface this as.
+ * Falls into applyOp's `else -> Unit` and is safely ignored on receipt.
+ */
+@Serializable
+data class EditPresencePayload(val objectId: String, val active: Boolean)

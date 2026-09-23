@@ -15,6 +15,7 @@ import type { LocalIdentity } from "../lib/app.js";
 import { Button } from "./ui/button.js";
 import { SelectMenu } from "./ui/select-menu.js";
 import { ActivityIcon, CommandIcon, LinkIcon } from "./mesh-icons.js";
+import { useEditingPresence } from "../lib/use-editing-presence.js";
 
 const EDITABLE_TYPES = new Set(["text", "document", "code", "link"]);
 
@@ -72,10 +73,12 @@ function typeIcon(type: string) {
 function TextEditor(props: {
   object: MeshObject;
   engine: MeshEngine;
+  nameOf: (id: string) => string;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(textOf(props.object.content));
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editingElsewhere = useEditingPresence(props.engine, props.object.id, true);
 
   function push(next: string) {
     setDraft(next);
@@ -93,6 +96,11 @@ function TextEditor(props: {
 
   return (
     <div className="space-y-2">
+      {editingElsewhere.length > 0 && (
+        <p className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-500">
+          {editingElsewhere.map((id) => props.nameOf(id)).join(", ")} {editingElsewhere.length === 1 ? "is" : "are"} also editing this right now — edits merge, but check before saving.
+        </p>
+      )}
       <textarea
         autoFocus
         value={draft}
@@ -319,6 +327,7 @@ export function InboxPanel(props: {
                 <TextEditor
                   object={object}
                   engine={props.engine}
+                  nameOf={nameOf}
                   onClose={() => {
                     setEditingId(null);
                     setContinuedFrom(null);
