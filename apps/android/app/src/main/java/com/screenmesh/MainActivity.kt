@@ -2,6 +2,8 @@ package com.screenmesh
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -11,11 +13,9 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.EditText
-import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.screenmesh.crypto.DeviceIdentity
 import com.screenmesh.crypto.createPairingPayload
@@ -44,6 +44,12 @@ import com.screenmesh.transport.nearby.AcousticTransport
 import com.screenmesh.transport.nearby.BleTransport
 import com.screenmesh.transport.nearby.NfcPairing
 import com.screenmesh.transport.nearby.WifiDirectTransport
+import com.screenmesh.ui.ScreenMeshActions
+import com.screenmesh.ui.ScreenMeshApp
+import com.screenmesh.ui.ScreenMeshTheme
+import com.screenmesh.ui.ScreenMeshUiState
+import com.screenmesh.ui.Screen
+import com.screenmesh.ui.encodeQrBitmap
 import com.dweekly.cyrinxhil.Role as AcousticRole
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -56,18 +62,13 @@ import javax.crypto.SecretKey
 private const val NFC_WRITE_ARM_WINDOW_MS = 30_000L
 
 /**
- * Minimal reference UI (classic Views, no Compose) exercising MeshEngine
- * end to end against a real relay: join a workspace from a pairing code,
- * then send/receive plain text objects. This is intentionally bare — a
- * proof that the ported protocol/crypto/transport/sync stack actually
- * talks to the same relay the web PWA and desktop agent use, not a
- * finished app UI. See docs/Android.md.
- *
- * Persists identity + session (LocalStateStore) so relaunching the app
- * reconnects straight to the relay instead of needing a fresh pairing
- * code every time — the pairing token itself is single-use, so only the
- * FIRST join calls joinWorkspaceHttp; every subsequent launch just
- * reopens the relay connection with the same identity.
+ * Compose-based reference UI exercising MeshEngine end to end against a
+ * real relay: join a workspace from a pairing code, then send/receive
+ * plain text objects, see the paired-device roster, and invite new devices
+ * via a generated QR/code. All business logic here is unchanged from the
+ * original Views-based UI — see docs/Android.md — only how it's presented
+ * moved to Jetpack Compose (the com.screenmesh.ui package), so it reads and feels
+ * like the same product as the web PWA instead of a raw debug harness.
  *
  * Also exercises all three radio-based nearby-pairing bootstraps — BLE,
  * NFC, and (as a raw transport rather than a pairing bootstrap) Wi-Fi
@@ -78,9 +79,10 @@ private const val NFC_WRITE_ARM_WINDOW_MS = 30_000L
  * the ordinary decodePairingPayload + joinWorkspaceHttp flow; acoustic
  * has no pairing bootstrap of its own yet, just a manual
  * initiator/responder start. All four are UNTESTED on real hardware —
- * see docs/Android.md.
+ * see docs/Android.md — and live behind the UI's collapsed "Advanced"
+ * section rather than the primary flow.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
     private val background: ExecutorService = Executors.newSingleThreadExecutor()
     private var engine: MeshEngine? = null
     private var bleTransport: BleTransport? = null
@@ -90,6 +92,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localState: LocalStateStore
     private lateinit var engineState: LocalEngineStateStore
     private lateinit var fileChunkStore: FileChunkStore
+
+    private val ui = ScreenMeshUiState()
 
     // Current session, kept around so "Advertise via BLE"/"Write to NFC
     // tag" can mint a new pairing token without the user re-entering
@@ -103,22 +107,6 @@ class MainActivity : AppCompatActivity() {
     /** Set while waiting for the next NFC tag tap to write a freshly-minted pairing code onto it. */
     private var pendingNfcWriteCode: String? = null
     private var pendingNfcWriteExpiresAt: Long = 0L
-
-    private lateinit var serverUrlInput: EditText
-    private lateinit var pairingCodeInput: EditText
-    private lateinit var deviceNameInput: EditText
-    private lateinit var joinButton: Button
-    private lateinit var forgetButton: Button
-    private lateinit var scanNearbyButton: Button
-    private lateinit var advertiseButton: Button
-    private lateinit var nfcWriteButton: Button
-    private lateinit var wifiDirectScanButton: Button
-    private lateinit var acousticInitiatorButton: Button
-    private lateinit var acousticResponderButton: Button
-    private lateinit var statusText: TextView
-    private lateinit var messageInput: EditText
-    private lateinit var sendButton: Button
-    private lateinit var logText: TextView
 
     private var pendingPermissionAction: (() -> Unit)? = null
     private val permissionLauncher = registerForActivityResult(
@@ -134,36 +122,28 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
         localState = LocalStateStore(applicationContext)
         engineState = LocalEngineStateStore(applicationContext)
         fileChunkStore = FileChunkStore(applicationContext)
 
-        serverUrlInput = findViewById(R.id.et_server_url)
-        pairingCodeInput = findViewById(R.id.et_pairing_code)
-        deviceNameInput = findViewById(R.id.et_device_name)
-        joinButton = findViewById(R.id.btn_join)
-        forgetButton = findViewById(R.id.btn_forget)
-        scanNearbyButton = findViewById(R.id.btn_scan_nearby)
-        advertiseButton = findViewById(R.id.btn_advertise_ble)
-        nfcWriteButton = findViewById(R.id.btn_nfc_write)
-        wifiDirectScanButton = findViewById(R.id.btn_wifi_direct_scan)
-        acousticInitiatorButton = findViewById(R.id.btn_acoustic_initiator)
-        acousticResponderButton = findViewById(R.id.btn_acoustic_responder)
-        statusText = findViewById(R.id.tv_status)
-        messageInput = findViewById(R.id.et_message)
-        sendButton = findViewById(R.id.btn_send)
-        logText = findViewById(R.id.tv_log)
-
-        joinButton.setOnClickListener { onJoinClicked() }
-        sendButton.setOnClickListener { onSendClicked() }
-        forgetButton.setOnClickListener { onForgetClicked() }
-        scanNearbyButton.setOnClickListener { withPermissions(blePermissions()) { startBleScan() } }
-        advertiseButton.setOnClickListener { withPermissions(blePermissions()) { onAdvertiseViaBleClicked() } }
-        nfcWriteButton.setOnClickListener { onNfcWriteClicked() }
-        wifiDirectScanButton.setOnClickListener { withPermissions(wifiDirectPermissions()) { startWifiDirectScan() } }
-        acousticInitiatorButton.setOnClickListener { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.MASTER) } }
-        acousticResponderButton.setOnClickListener { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.SLAVE) } }
+        val actions = ScreenMeshActions(
+            onJoin = { onJoinClicked() },
+            onSend = { onSendClicked() },
+            onForget = { onForgetClicked() },
+            onScanBle = { withPermissions(blePermissions()) { startBleScan() } },
+            onAdvertiseBle = { withPermissions(blePermissions()) { onAdvertiseViaBleClicked() } },
+            onNfcWrite = { onNfcWriteClicked() },
+            onWifiDirectScan = { withPermissions(wifiDirectPermissions()) { startWifiDirectScan() } },
+            onAcousticInitiator = { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.MASTER) } },
+            onAcousticResponder = { withPermissions(acousticPermissions()) { startAcousticLink(AcousticRole.SLAVE) } },
+            onMintPairCode = { onMintPairCodeClicked() },
+            onCopyToClipboard = { text -> copyToClipboard(text) },
+        )
+        setContent {
+            ScreenMeshTheme {
+                ScreenMeshApp(ui, actions)
+            }
+        }
 
         // A tag tap can cold-launch the Activity via the manifest's
         // NDEF_DISCOVERED filter — that intent arrives here, in
@@ -177,15 +157,19 @@ class MainActivity : AppCompatActivity() {
     /** On a fresh launch, reconnect from saved state instead of requiring a new pairing code. */
     private fun tryAutoResume() {
         val saved = localState.load() ?: return
-        serverUrlInput.setText(saved.serverUrl)
-        deviceNameInput.setText(saved.deviceName)
+        ui.serverUrl = saved.serverUrl
+        ui.deviceName = saved.deviceName
         setStatus("Reconnecting to \"${saved.workspaceId}\"...")
         background.execute {
             try {
                 val identity = saved.identity.toDeviceIdentity()
                 val workspaceKey = importWorkspaceKey(saved.workspaceKeyB64)
                 startEngine(identity, saved.serverUrl, saved.workspaceId, saved.ownerDeviceId, workspaceKey, saved.workspaceKeyB64)
-                runOnUiThread { setStatus("Reconnected as ${saved.deviceName}") }
+                runOnUiThread {
+                    ui.workspaceLabel = saved.deviceName
+                    ui.screen = Screen.Workspace
+                    setStatus("Reconnected as ${saved.deviceName}")
+                }
             } catch (e: Exception) {
                 runOnUiThread { setStatus("Reconnect failed: ${e.message}") }
             }
@@ -193,13 +177,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onJoinClicked() {
-        val serverUrl = serverUrlInput.text.toString().trim().trimEnd('/')
-        val code = pairingCodeInput.text.toString().trim()
-        val deviceName = deviceNameInput.text.toString().trim().ifEmpty { "Android Phone" }
+        val serverUrl = ui.serverUrl.trim().trimEnd('/')
+        val code = ui.pairingCodeField.trim()
+        val deviceName = ui.deviceName.trim().ifEmpty { "Android Phone" }
         if (serverUrl.isEmpty() || code.isEmpty()) {
             setStatus("Enter a server URL and pairing code first.")
             return
         }
+        runOnUiThread { ui.busy = true }
         setStatus("Joining...")
         background.execute {
             try {
@@ -227,10 +212,16 @@ class MainActivity : AppCompatActivity() {
                 startEngine(identity, serverUrl, joined.workspace.id, joined.workspace.ownerDeviceId, workspaceKey, payload.workspaceKey, localDirect)
                 runOnUiThread {
                     val route = if (payload.lanEndpoint != null && localDirect == null) " (local listener unavailable; relay fallback)" else if (localDirect != null) " (local companion connected)" else ""
+                    ui.workspaceLabel = deviceName
+                    ui.screen = Screen.Workspace
+                    ui.busy = false
                     setStatus("Joined \"${joined.workspace.name}\" as $deviceName$route")
                 }
             } catch (e: Exception) {
-                runOnUiThread { setStatus("Join failed: ${e.message}") }
+                runOnUiThread {
+                    ui.busy = false
+                    setStatus("Join failed: ${e.message}")
+                }
             }
         }
     }
@@ -263,6 +254,7 @@ class MainActivity : AppCompatActivity() {
                 onObjectReceived = { obj, senderId ->
                     appendLog("Received from $senderId: ${obj.content}")
                 },
+                onDevicesChanged = { devices -> runOnUiThread { ui.devices = devices.filter { it.id != identity.deviceId } } },
                 stateStore = engineState,
                 chunkStore = fileChunkStore,
             ),
@@ -275,6 +267,7 @@ class MainActivity : AppCompatActivity() {
         currentOwnerDeviceId = ownerDeviceId
         currentWorkspaceKeyB64 = workspaceKeyB64
         newEngine.start()
+        runOnUiThread { ui.devices = newEngine.devicesSnapshot().filter { it.id != identity.deviceId } }
     }
 
     private fun onSendClicked() {
@@ -283,7 +276,7 @@ class MainActivity : AppCompatActivity() {
             setStatus("Join a workspace first.")
             return
         }
-        val text = messageInput.text.toString()
+        val text = ui.messageText
         if (text.isEmpty()) return
         background.execute {
             try {
@@ -296,7 +289,7 @@ class MainActivity : AppCompatActivity() {
                 currentEngine.sendObject(MeshObjectTypes.TEXT, content, recipients)
                 runOnUiThread {
                     appendLog("Sent: $text")
-                    messageInput.setText("")
+                    ui.messageText = ""
                 }
             } catch (e: Exception) {
                 runOnUiThread { setStatus("Send failed: ${e.message}") }
@@ -319,12 +312,45 @@ class MainActivity : AppCompatActivity() {
         if (workspaceId != null && deviceId != null) {
             engineState.clear(workspaceId, deviceId)
         }
-        pairingCodeInput.setText("")
-        logText.text = ""
+        ui.pairingCodeField = ""
+        ui.logLines = emptyList()
+        ui.devices = emptyList()
+        ui.workspaceLabel = null
+        ui.mintedCode = null
+        ui.mintedQr = null
+        ui.screen = Screen.Onboarding
         setStatus("Forgot this device. Enter a fresh pairing code to join again.")
         if (currentEngine != null) {
             background.execute { currentEngine.stop() }
         }
+    }
+
+    // --- Pair screen: mint + display a fresh QR/code ---
+
+    private fun onMintPairCodeClicked() {
+        runOnUiThread { ui.pairBusy = true }
+        background.execute {
+            try {
+                val code = mintPairingCode()
+                val qr = encodeQrBitmap(code)
+                runOnUiThread {
+                    ui.mintedCode = code
+                    ui.mintedQr = qr
+                    ui.pairBusy = false
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    ui.pairBusy = false
+                    setStatus("Couldn't generate a pairing code: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun copyToClipboard(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("ScreenMesh pairing code", text))
+        setStatus("Copied to clipboard.")
     }
 
     // --- shared pairing-code minting (used by both the BLE and NFC bootstraps) ---
@@ -382,7 +408,7 @@ class MainActivity : AppCompatActivity() {
             transport.requestPairingCode(peer) { code ->
                 if (code != null) {
                     runOnUiThread {
-                        pairingCodeInput.setText(code)
+                        ui.pairingCodeField = code
                         setStatus("Got a pairing code via BLE from ${peer.name} — tap Join workspace.")
                     }
                 } else {
@@ -467,8 +493,10 @@ class MainActivity : AppCompatActivity() {
 
         val code = NfcPairing.readPairingCodeFromIntent(intent)
         if (code != null) {
-            pairingCodeInput.setText(code)
-            setStatus("Got a pairing code via NFC tap — tap Join workspace.")
+            runOnUiThread {
+                ui.pairingCodeField = code
+                setStatus("Got a pairing code via NFC tap — tap Join workspace.")
+            }
         }
     }
 
@@ -570,11 +598,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(text: String) {
-        runOnUiThread { statusText.text = text }
+        runOnUiThread { ui.status = text }
     }
 
     private fun appendLog(line: String) {
-        runOnUiThread { logText.append("\n$line") }
+        runOnUiThread { ui.logLines = ui.logLines + line }
     }
 
     override fun onDestroy() {

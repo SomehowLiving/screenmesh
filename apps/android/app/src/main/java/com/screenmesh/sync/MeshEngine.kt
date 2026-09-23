@@ -174,6 +174,10 @@ data class EngineConfig(
     val onObjectReceived: ((MeshObject, String) -> Unit)? = null,
     /** Fires when another device hands an object off to us via continueOnDevice. */
     val onContinueOnDevice: ((FocusRequest) -> Unit)? = null,
+    /** Fires with the full roster whenever presence changes (join, leave,
+     *  online/offline) — lets a UI show a live device list instead of
+     *  polling devicesSnapshot(). */
+    val onDevicesChanged: ((List<Device>) -> Unit)? = null,
     /** Optional Android-local persistence for objects/deliveries/outbox state. */
     val stateStore: EngineStateStore? = null,
     /** Optional durable buffer for in-progress incoming file chunks — see FileChunkStore. */
@@ -1173,6 +1177,7 @@ class MeshEngine(private val cfg: EngineConfig) {
         // The roster is authoritative: devices no longer in it were revoked.
         val ids = entries.map { it.id }.toSet()
         devices.keys.filter { it !in ids }.forEach { devices.remove(it) }
+        cfg.onDevicesChanged?.invoke(devices.values.toList())
 
         // A device just went online — that's the moment carried bundles for
         // it can be forwarded, and a moment a new carrier becomes available.

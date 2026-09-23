@@ -33,6 +33,16 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    buildFeatures {
+        compose = true
+    }
+
+    // Pinned to the Kotlin 1.9.24 compiler this module already uses — see
+    // https://developer.android.com/jetpack/androidx/releases/compose-kotlin
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
 }
 
 dependencies {
@@ -45,6 +55,24 @@ dependencies {
     // in a compatible androidx.activity transitively; pinned explicitly
     // here so the version isn't left to transitive resolution.
     implementation("androidx.activity:activity-ktx:1.9.0")
+
+    // Jetpack Compose UI — the app's screens (Workspace, Pair, Devices) are
+    // built with it instead of the XML layout this module started with.
+    // BOM pins every androidx.compose.* artifact to a mutually-compatible
+    // set so individual versions don't need to be tracked by hand.
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // QR code generation for the Pair screen — encode only, no camera
+    // scanning dependency needed (BLE/NFC already cover code hand-off, and
+    // pasting a code/link covers the rest).
+    implementation("com.google.zxing:core:3.5.3")
 
     // Relay client (WebSocket + HTTP pairing calls) — same role as
     // WebSocketRelayTransport (packages/transport) and the fetch() calls
